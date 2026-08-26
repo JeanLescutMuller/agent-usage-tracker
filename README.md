@@ -1,4 +1,4 @@
-# claude-utilization-tracker
+# claude-utilization-cost-tracker
 
 Empirically studies how Anthropic's Claude Code utilization percentage
 (`five_hour` / `seven_day`, the numbers behind `/status` and this
@@ -31,8 +31,8 @@ completely different persistence properties:
 
 ### `poll.py` — the only part that runs on a timer
 
-Deployed to `~/opt/claude-utilization-tracker/`, scheduled via a launchd
-LaunchAgent (`com.jeanlescut.claude-utilization-tracker`, every 5
+Deployed to `~/opt/claude-utilization-cost-tracker/`, scheduled via a launchd
+LaunchAgent (`com.jeanlescut.claude-utilization-cost-tracker`, every 5
 minutes — see `install.sh`). Each run fetches the full raw
 `/api/oauth/usage` response (unfiltered — every field, including ones
 currently `null` on this account) plus its HTTP response headers, and
@@ -74,15 +74,17 @@ to that moment.
 ./install.sh
 ```
 
-Idempotent — deploys both scripts to `~/opt/claude-utilization-tracker/`,
+Idempotent — deploys both scripts to `~/opt/claude-utilization-cost-tracker/`,
 writes/refreshes the LaunchAgent plist, and (re)loads it via
-`launchctl bootstrap`. Self-migrating: detects the pre-2026-08-26 layout
-(`~/opt/utilization-tracker`, label `com.jeanlescut.utilization-tracker`)
-and moves it to the current name automatically, carrying
-`data/utilization-log.jsonl` forward.
+`launchctl bootstrap`. Self-migrating: detects either prior layout
+(oldest: `~/opt/utilization-tracker`, label
+`com.jeanlescut.utilization-tracker`; pre-2026-08-26 rename:
+`~/opt/claude-utilization-tracker`, label
+`com.jeanlescut.claude-utilization-tracker`) and moves it to the current
+name automatically, carrying `data/utilization-log.jsonl` forward.
 
 ```bash
-python3 ~/opt/claude-utilization-tracker/recompute_token_events.py
+python3 ~/opt/claude-utilization-cost-tracker/recompute_token_events.py
 ```
 
 Run this before any analysis session — it's what populates/refreshes
@@ -90,7 +92,7 @@ Run this before any analysis session — it's what populates/refreshes
 
 ## Data files
 
-Both live under `~/opt/claude-utilization-tracker/data/` (the deployed
+Both live under `~/opt/claude-utilization-cost-tracker/data/` (the deployed
 runtime location, not this source checkout — see the dev-wide convention
 in `~/dev/CLAUDE.md`).
 

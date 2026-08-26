@@ -1,43 +1,48 @@
 #!/usr/bin/env bash
-# Deploys the utilization poller to ~/opt/claude-utilization-tracker and
-# schedules it via a launchd LaunchAgent (every 5 minutes). Idempotent -
+# Deploys the utilization/cost poller to ~/opt/claude-utilization-cost-tracker
+# and schedules it via a launchd LaunchAgent (every 5 minutes). Idempotent -
 # safe to re-run any time, including on a fresh machine. Self-migrating -
-# detects the pre-2026-08-26 layout (~/opt/utilization-tracker,
-# com.jeanlescut.utilization-tracker) and moves it to the current one,
-# carrying data/utilization-log.jsonl forward (the one file here that
-# can't be recomputed - see poll.py's docstring).
+# detects either prior layout (oldest: ~/opt/utilization-tracker,
+# com.jeanlescut.utilization-tracker; pre-2026-08-26 rename:
+# ~/opt/claude-utilization-tracker, com.jeanlescut.claude-utilization-tracker)
+# and moves it to the current one, carrying data/utilization-log.jsonl
+# forward (the one file here that can't be recomputed - see poll.py's
+# docstring).
 #
 # Usage: ./install.sh
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FOLDER_PROD="$HOME/opt/claude-utilization-tracker"
+FOLDER_PROD="$HOME/opt/claude-utilization-cost-tracker"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-LABEL="com.jeanlescut.claude-utilization-tracker"
+LABEL="com.jeanlescut.claude-utilization-cost-tracker"
 REAL_PLIST="$FOLDER_PROD/$LABEL.plist"
 LINK_PLIST="$LAUNCH_AGENTS/$LABEL.plist"
 
-# --- one-time migration off the pre-2026-08-26 name ---
-OLD_FOLDER_PROD="$HOME/opt/utilization-tracker"
-OLD_LABEL="com.jeanlescut.utilization-tracker"
-OLD_LINK_PLIST="$LAUNCH_AGENTS/$OLD_LABEL.plist"
-if [ -d "$OLD_FOLDER_PROD" ]; then
-    echo "Migrating $OLD_FOLDER_PROD -> $FOLDER_PROD..."
-    launchctl bootout "gui/$(id -u)" "$OLD_LINK_PLIST" 2>/dev/null || true
-    rm -f "$OLD_LINK_PLIST"
-    mkdir -p "$FOLDER_PROD"
-    if [ -d "$OLD_FOLDER_PROD/data" ]; then
-        mkdir -p "$FOLDER_PROD/data"
-        cp -n "$OLD_FOLDER_PROD/data/"* "$FOLDER_PROD/data/" 2>/dev/null || true
+# --- one-time migration off each prior name, oldest first ---
+migrate_legacy() {
+    local old_folder="$1" old_label="$2"
+    local old_link_plist="$LAUNCH_AGENTS/$old_label.plist"
+    if [ -d "$old_folder" ]; then
+        echo "Migrating $old_folder -> $FOLDER_PROD..."
+        launchctl bootout "gui/$(id -u)" "$old_link_plist" 2>/dev/null || true
+        rm -f "$old_link_plist"
+        mkdir -p "$FOLDER_PROD"
+        if [ -d "$old_folder/data" ]; then
+            mkdir -p "$FOLDER_PROD/data"
+            cp -n "$old_folder/data/"* "$FOLDER_PROD/data/" 2>/dev/null || true
+        fi
+        rm -rf "$old_folder"
     fi
-    rm -rf "$OLD_FOLDER_PROD"
-fi
+}
+migrate_legacy "$HOME/opt/utilization-tracker" "com.jeanlescut.utilization-tracker"
+migrate_legacy "$HOME/opt/claude-utilization-tracker" "com.jeanlescut.claude-utilization-tracker"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
 
-# Real files live in ~/opt/claude-utilization-tracker/ (code + data + the
-# plist itself); ~/Library/LaunchAgents/ only ever holds a symlink into it
+# Real files live in ~/opt/claude-utilization-cost-tracker/ (code + data +
+# the plist itself); ~/Library/LaunchAgents/ only ever holds a symlink into it
 # - see ~/dev/CLAUDE.md. Deliberately NOT wiping FOLDER_PROD before copying
 # (unlike auto-commit's deploy script) - data/utilization-log.jsonl is the
 # append-only log this tool exists to accumulate, and must survive a
