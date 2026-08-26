@@ -19,13 +19,21 @@ PYTHON3="$(command -v python3)"
 # Real files live in ~/opt/utilization-tracker/ (code + data + the plist
 # itself); ~/Library/LaunchAgents/ only ever holds a symlink into it - see
 # ~/dev/CLAUDE.md. Deliberately NOT wiping FOLDER_PROD before copying (unlike
-# auto-commit's deploy script) - data/ holds the append-only log and byte
-# offsets this tool exists to accumulate, and must survive a re-install.
+# auto-commit's deploy script) - data/utilization-log.jsonl is the
+# append-only log this tool exists to accumulate, and must survive a
+# re-install (it can't be recomputed - see poll.py's docstring).
 mkdir -p "$FOLDER_PROD/data"
 mkdir -p "$LAUNCH_AGENTS"
 
 cp "$SRC/poll.py" "$FOLDER_PROD/poll.py"
 chmod +x "$FOLDER_PROD/poll.py"
+
+# Not scheduled - recompute_token_events.py is run by hand at analysis
+# time, rebuilding data/token-events.jsonl fresh from the transcripts
+# Claude Code already keeps under ~/.claude/projects/. Deployed here anyway
+# so it's available wherever poll.py's data/ actually lives.
+cp "$SRC/recompute_token_events.py" "$FOLDER_PROD/recompute_token_events.py"
+chmod +x "$FOLDER_PROD/recompute_token_events.py"
 
 echo "(Over-)writing $REAL_PLIST..."
 tee "$REAL_PLIST" >/dev/null <<EOF
