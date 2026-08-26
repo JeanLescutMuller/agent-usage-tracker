@@ -115,6 +115,18 @@ Keychain read or the HTTP call fails, and every consumer must skip those.
   if usage ever arrives from a client that doesn't write local
   transcripts. `seven_day` is different: it really is a fixed rolling
   schedule, so there both rules agree to within a minute.
+- **Poll coverage is much worse than the 5-minute interval suggests: ~46%
+  of elapsed time has no reading at all.** Two distinct causes, and they
+  need different fixes: (a) rows with `api: null` — the LaunchAgent fired
+  but the fetch failed (39 of 341 rows, ~11%); `poll.py` currently
+  discards *why*, which is a real blind spot. (b) No row written at all —
+  27 gaps of 10–106 min. This machine is a laptop that sleeps constantly
+  (`pmset -g log` shows DarkWake/Sleep cycles every ~15 min), and launchd
+  `StartInterval` does not fire during sleep, nor does it replay missed
+  ticks; it fires once on wake. Mostly benign, since no local usage
+  happens while asleep either — but it cost us the exact 68%→100%
+  crossing of the one saturated window (28-min gap), and a window that
+  opens and closes entirely inside a gap is invisible.
 - **Utilization is integer-quantized, so low-% readings are near-useless
   for inferring a budget.** `B_implied = cum_cost / (util/100)` at 3%
   carries a ±17% quantization error; at 53% it's ±1%. Only take implied
@@ -175,11 +187,20 @@ This is exactly what `/clear` and `/compact` exist to reset/shrink.
   1. the 5-hour allowance is *reduced when the weekly limit is nearly
      exhausted* — the $58 window ran while `seven_day` sat at 79–81%
      (`warning`), the $81 window while it was at ~15–18% (`normal`);
-  2. usage from clients that write no local transcript (claude.ai web,
-     mobile, another machine) counts toward the account-wide limit but is
-     invisible to `recompute_token_events.py`, inflating nothing but
-     leaving *gaps* — note the saturated window hit 100% at only $77.24 of
-     locally-visible cost, i.e. below its own $81 implied budget;
+  2. ~~usage from clients that write no local transcript~~ — **largely
+     ruled out on 2026-08-26.** Test: for every pair of consecutive polls
+     inside one window where utilization *rose*, check whether local token
+     events explain the rise. Result: **0 of 36 intervals unexplained** —
+     every observed movement of the meter is accounted for by local usage.
+     Caveat: this only covers intervals where two consecutive polls exist,
+     i.e. ~53% of elapsed time (see the poll-coverage gotcha), so usage
+     hiding entirely inside an un-polled gap remains possible. Worth
+     re-running as coverage improves — it's cheap and it's the one
+     hypothesis that can be falsified from existing data alone.
+     (When re-running: **re-run `recompute_token_events.py` first.** A
+     stale events file makes the current session's own usage look like
+     phantom external usage — that false positive appeared on the first
+     attempt at this test.)
   3. the cost model is missing a term (a per-request floor, or web
      search/fetch server-tool billing).
   Resolving this is now the most valuable open question in the project —
