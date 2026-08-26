@@ -118,9 +118,19 @@ in `~/dev/CLAUDE.md`).
     "date": "...", "request-id": "...",
     "anthropic-organization-id": "...", "anthropic-workspace-id": "...",
     "server-timing": "..."
-  }
+  },
+  "error": null                           // null on success; otherwise why the
+                                          // reading is missing, e.g.
+  // {"stage":"keychain","type":"CalledProcessError"}          not logged in
+  // {"stage":"http","type":"HTTPError","status":401,"detail":"Unauthorized"}
+  // {"stage":"network","type":"URLError","detail":"timed out"}
+  // {"stage":"parse","type":"JSONDecodeError","detail":"..."}
 }
 ```
+The `error` field was added 2026-08-26; rows before that have no `error`
+key at all (treat absent as "unknown reason"). The keychain stage records
+only the exception *type*, never its message — that stage handles the
+credential blob and a message could echo part of it into the log.
 Rows written before 2026-08-26 have an older schema (`token_deltas` /
 `baseline` fields inline, no `api_headers`) — handle both shapes if
 reading the full file history. Rows where the Keychain read or the HTTP

@@ -118,12 +118,19 @@ Keychain read or the HTTP call fails, and every consumer must skip those.
 - **Poll coverage is much worse than the 5-minute interval suggests: ~46%
   of elapsed time has no reading at all.** Two distinct causes, and they
   need different fixes: (a) rows with `api: null` — the LaunchAgent fired
-  but the fetch failed (39 of 341 rows, ~11%); `poll.py` currently
-  discards *why*, which is a real blind spot. (b) No row written at all —
+  but the fetch failed (39 of 341 rows, ~11%). **Fixed 2026-08-26:**
+  `poll.py` now records an `error` object (`stage` keychain/http/network/
+  parse, plus HTTP `status`) instead of discarding the reason. Rows logged
+  before that have no `error` key. Once a few failures accumulate, check
+  whether they're 401s (token expiry — the poller would need a re-login
+  path) or transient network, because the fix differs. (b) No row written at all —
   27 gaps of 10–106 min. This machine is a laptop that sleeps constantly
   (`pmset -g log` shows DarkWake/Sleep cycles every ~15 min), and launchd
   `StartInterval` does not fire during sleep, nor does it replay missed
-  ticks; it fires once on wake. Mostly benign, since no local usage
+  ticks; it fires once on wake. `RunAtLoad` was added 2026-08-26 so login
+  and every `./install.sh` produce an immediate reading — that helps at
+  boot, but it does **not** address sleep gaps, so don't expect coverage
+  to jump. Mostly benign, since no local usage
   happens while asleep either — but it cost us the exact 68%→100%
   crossing of the one saturated window (28-min gap), and a window that
   opens and closes entirely inside a gap is invisible.

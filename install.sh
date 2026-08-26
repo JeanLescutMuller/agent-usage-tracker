@@ -79,6 +79,16 @@ tee "$REAL_PLIST" >/dev/null <<EOF
     <key>StartInterval</key>
     <integer>300</integer>
 
+    <!-- Take a reading immediately when the job is loaded, i.e. at login and
+         every time this script re-bootstraps it - otherwise the first reading
+         after a reboot is up to 5 minutes late, and ./install.sh gives no
+         immediate signal that polling actually works.
+         Note this does NOT address sleep gaps: StartInterval doesn't fire
+         while the Mac is asleep, though launchd does fire once on wake. Those
+         gaps are mostly benign (no local usage happens while asleep either). -->
+    <key>RunAtLoad</key>
+    <true/>
+
     <key>StandardOutPath</key>
     <string>$FOLDER_PROD/poll.log</string>
     <key>StandardErrorPath</key>
