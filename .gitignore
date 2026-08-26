@@ -2,3 +2,4 @@ data/
 *.log
 *.err
 __pycache__/
+.ipynb_checkpoints/
