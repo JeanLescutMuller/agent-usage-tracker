@@ -102,6 +102,18 @@ in `~/dev/CLAUDE.md`).
   "ts": 1787736614,                       // epoch seconds
   "iso": "2026-08-26T09:30:14Z",
   "api": { /* full raw /api/oauth/usage response, or null on failure */ },
+  // ^ 17 top-level keys. Besides five_hour/seven_day (each with
+  //   utilization, resets_at, and always-null limit/used/remaining_dollars):
+  //     "limits": [ {kind:"session"|"weekly_all", group, percent,
+  //                  severity:"normal"|"warning"|"critical",
+  //                  resets_at, scope, is_active} ]   // percent mirrors the
+  //                  // flat blocks exactly; severity/is_active are extra
+  //     "spend":   {enabled, percent, severity, balance, cap, limit,
+  //                 auto_reload, can_purchase_credits, disclaimer,
+  //                 used:{amount_minor, currency:"USD", exponent:2}}
+  //     "extra_usage": {is_enabled, credits_ever_enabled, used_credits, ...}
+  //     "nimbus_quill": a limit block, always 0.0/null on this account
+  //     plus several never-populated keys (seven_day_opus, tangelo, ...)
   "api_headers": {                        // or null on failure
     "date": "...", "request-id": "...",
     "anthropic-organization-id": "...", "anthropic-workspace-id": "...",
@@ -111,7 +123,9 @@ in `~/dev/CLAUDE.md`).
 ```
 Rows written before 2026-08-26 have an older schema (`token_deltas` /
 `baseline` fields inline, no `api_headers`) — handle both shapes if
-reading the full file history.
+reading the full file history. Rows where the Keychain read or the HTTP
+call failed have `api: null` (~11% of rows so far) — every consumer must
+skip those rather than assume a payload is present.
 
 **`token-events.jsonl`** — one record per assistant message with usage:
 ```jsonc
@@ -187,7 +201,20 @@ records which.
   implied a budget of **$57.54–$73.07** (Sonnet-only) — much tighter than
   the **$19–$82** range produced by the old aggregated-only logger, which
   had to bound rather than compute the cache-write cost.
+- A `five_hour` window has since saturated at **100%** (2026-08-26,
+  severity `critical`), giving the first ceiling observation — and with
+  it a complication: the implied budget is very stable *within* a window
+  but differs ~40% *between* windows ($57.5–$59.7 vs $80.5–$82.1). A
+  single fixed dollar budget can't explain both, and the gap is too large
+  to be Opus mispricing. See `CLAUDE.md`'s Findings section for the
+  candidate explanations (weekly-limit throttling, usage from clients
+  that write no local transcript, or a missing cost term).
+- The `*_dollars` fields on every limit block, and the `spend` block's
+  real money type (`{amount_minor, currency, exponent}`), are the
+  strongest structural hint that the meter is dollar-denominated — but
+  they are gated behind paid usage credits and are null in every payload
+  logged. `analysis.ipynb` re-checks them on every run and reports
+  loudly if that ever changes.
 - Still missing for a fully precise mapping: confirmation of the
   weighting formula itself (still a hypothesis), more closed windows
-  (only 4 so far, none near the 100% ceiling), and real Opus 5 volume
-  (33 incidental events found so far, not enough for a per-model ratio).
+  (only 4 so far), and enough Opus 5 volume for a per-model ratio.

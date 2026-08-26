@@ -79,9 +79,12 @@ Full JSON schema examples are in `README.md`. Quick summary:
 - `data/utilization-log.jsonl` — one record per poll tick, `{ts, iso, api, api_headers}`. Rows written before 2026-08-26 have an older schema (`token_deltas`/`baseline` fields, no `api_headers`) — handle both shapes if reading full history.
 - `data/token-events.jsonl` — one record per assistant message with usage, full fidelity (model, effort, session/cwd/sidechain identity, verbatim `usage` object including the `cache_creation` 5m/1h split and `output_tokens_details.thinking_tokens`). Deliberately excludes message content.
 
-As of 2026-08-26: 315 utilization polls, 14,137 token events (back to
-2026-07-30, though polling didn't start until 2026-08-24 — so `seven_day`
-correlation has sparse coverage for the first several days of that range).
+As of 2026-08-26: 318 utilization poll rows (284 with a usable payload —
+34 were failed fetches), 14,514 token events (back to 2026-07-30, though
+polling didn't start until 2026-08-24 — so `seven_day` correlation has
+sparse coverage for the first several days of that range). Note the ~11%
+failed-fetch rate: `poll.py` writes a row with `api: null` when the
+Keychain read or the HTTP call fails, and every consumer must skip those.
 
 ## Known gotchas / bugs already fixed (don't reintroduce)
 
@@ -98,6 +101,25 @@ correlation has sparse coverage for the first several days of that range).
   its "peak so far" is not a final, comparable number. The notebook
   already marks this (`is_open`) and labels plot legends accordingly —
   keep that distinction if you extend the plots.
+- **`five_hour` windows are NOT contiguous — a window's start is
+  `end - 5h`, never the previous window's end.** The 5-hour window is
+  *activity-triggered*: it opens on the first message sent after the
+  previous one expired, so `resets_at` = that moment + 5h. Between
+  windows there are genuine idle gaps where the API reports
+  `resets_at: null, utilization: 0.0` and no window exists at all (four
+  such gaps so far, 0.3h–13.7h long). `analysis.ipynb` originally chained
+  `start = prev_end`, which back-dated window starts by up to ~13.7h;
+  fixed 2026-08-26 to `end - span`. It made no numerical difference *on
+  this data* — an idle gap is idle precisely because nothing was sent, and
+  all four contain exactly 0 token events — but it would bite immediately
+  if usage ever arrives from a client that doesn't write local
+  transcripts. `seven_day` is different: it really is a fixed rolling
+  schedule, so there both rules agree to within a minute.
+- **Utilization is integer-quantized, so low-% readings are near-useless
+  for inferring a budget.** `B_implied = cum_cost / (util/100)` at 3%
+  carries a ±17% quantization error; at 53% it's ±1%. Only take implied
+  budget from high-utilization readings — mixing in the low ones is what
+  produced part of the old wide range.
 - **Cache-write duration matters for cost, not just cache-write amount.**
   `cache_creation_input_tokens` alone isn't enough — a 5-minute cache write
   is priced at 1.25× base input, a 1-hour write at 2×. Always use the
@@ -138,6 +160,30 @@ This is exactly what `/clear` and `/compact` exist to reset/shrink.
 - With the full cache-duration split, 4 closed `five_hour` windows implied
   a Sonnet-only budget of **$57.54–$73.07** — much tighter than the
   $19–$82 range the old aggregated-only logger produced.
+- **A `five_hour` window has now saturated at 100%** (2026-08-26
+  08:50→13:50, severity `critical`, closed). This is the first ceiling
+  observation — earlier notes saying no window came near 100% are
+  superseded. It also surfaced a problem: **the implied budget is not
+  constant across windows.** Within a single window `B_implied` is very
+  stable (window 08-24: $57.5–$59.7 across 31–53%; the saturated window:
+  $80.5–$82.1 across 60–68%), but *between* those two windows it differs
+  by ~40%. A fixed dollar budget cannot explain both. Model mix doesn't
+  explain it either: the saturated window's Sonnet-only cost alone
+  ($49.79 by 68%) already exceeds the whole $58 budget the 08-24 window
+  implied, so no Opus re-weighting can reconcile them. Untested
+  candidates, in order of plausibility:
+  1. the 5-hour allowance is *reduced when the weekly limit is nearly
+     exhausted* — the $58 window ran while `seven_day` sat at 79–81%
+     (`warning`), the $81 window while it was at ~15–18% (`normal`);
+  2. usage from clients that write no local transcript (claude.ai web,
+     mobile, another machine) counts toward the account-wide limit but is
+     invisible to `recompute_token_events.py`, inflating nothing but
+     leaving *gaps* — note the saturated window hit 100% at only $77.24 of
+     locally-visible cost, i.e. below its own $81 implied budget;
+  3. the cost model is missing a term (a per-request floor, or web
+     search/fetch server-tool billing).
+  Resolving this is now the most valuable open question in the project —
+  more so than accumulating further windows blindly.
 - The `$-cost` view in `analysis.ipynb` visually aligns the `five_hour`
   windows into a noticeably tighter single trend line than the raw-token-
   count view — early qualitative support for the dollar-cost hypothesis,
@@ -151,15 +197,51 @@ This is exactly what `/clear` and `/compact` exist to reset/shrink.
   up to 31,278 in one turn = ~$0.31 just for thinking on that one turn).
   If the user wants this measured properly, they need to deliberately run
   some sessions at lower effort.
-- Still thin: no real Opus-5 volume in any *closed* window (only 33
-  incidental events, all in the still-open window) — not enough for a
-  per-model cost-ratio check yet. `seven_day` has only 1 closed window so
-  far.
-- Full raw API response has fields still unpopulated/unexplained on this
-  account: `seven_day_opus`, `seven_day_sonnet`, plus internal codenamed
-  fields (`tangelo`, `nimbus_quill`, `iguana_necktie`, `cinder_cove`,
-  `amber_ladder`, `omelette_promotional`) — meaning unconfirmed, don't
-  assume what they represent without more evidence.
+- Opus-5 volume is still thin but no longer zero in a *closed* window: the
+  saturated 08-26 window carried 35 Opus events (~10% of its $ cost), and
+  the currently-open one is ~45% Opus. Still not enough to *test* the 2.5×
+  ratio — and note the cross-window budget discrepancy above is far too
+  large for Opus mispricing to explain. `seven_day` has only 1 closed
+  window so far.
+- **Payload surface (audited across all 284 payloads, 2026-08-26).** 17
+  top-level keys. Beyond `five_hour`/`seven_day`:
+  - `limits[]` — **not new**, present since the first poll. Always exactly
+    two entries, `kind` `session` and `weekly_all`. Its `percent` has
+    never once disagreed with the matching legacy top-level `utilization`
+    (0/284), so it's a mirror — but it adds `severity` and `is_active`,
+    which the flat blocks don't carry. `is_active` is exactly
+    complementary (one true, one false, in 284/284) and marks the
+    currently *governing* limit. Observed severity brackets — `session`:
+    `normal` ≤68%, `critical` =100%; `weekly_all`: `normal` ≤18%,
+    `warning` 79–81%. Thresholds can only be bracketed, not read off.
+    `scope` is always null.
+  - `spend` — **the strongest structural evidence for the dollar
+    hypothesis.** Carries a real money type,
+    `used: {amount_minor, currency: "USD", exponent: 2}`, plus `balance`,
+    `cap`, `limit`, `auto_reload`, `percent`, `severity`, and a
+    `disclaimer` string pointing at the usage-credits support article.
+    All-zero/null here because `enabled: false`.
+  - `*_dollars` (`limit_dollars`/`used_dollars`/`remaining_dollars`) —
+    present on **every** limit block, null in 284/284. They are gated
+    behind paid usage credits: `spend.enabled`,
+    `spend.can_purchase_credits`, `extra_usage.is_enabled` and
+    `extra_usage.credits_ever_enabled` are all `false` on this account.
+    **They will not populate on their own** — so this is not something to
+    passively wait for. Enabling usage credits would make the backend
+    report its own dollar figures directly and would settle the entire
+    question; that's a spending decision for the user, not a code change.
+    `analysis.ipynb`'s `payload_surface_report()` cell is the standing
+    tripwire — it re-checks every run and says loudly if one populates.
+  - `nimbus_quill` — structurally a *limit block* (same five keys as
+    `five_hour`), constant `utilization: 0.0`, `resets_at: null`. So it's
+    a limit that simply doesn't apply to this account, not an unknown kind
+    of object.
+  - `member_dashboard_available` — constant `false` (org/seat feature).
+  - Still entirely unpopulated, meaning unconfirmed: `seven_day_opus`,
+    `seven_day_sonnet`, `seven_day_oauth_apps`, `seven_day_cowork`,
+    `seven_day_omelette`, `tangelo`, `iguana_necktie`, `cinder_cove`,
+    `amber_ladder`, `omelette_promotional` — don't assume what they
+    represent without more evidence.
 
 ## How to continue the investigation
 
@@ -174,9 +256,16 @@ python3 ~/opt/claude-utilization-cost-tracker/recompute_token_events.py
 ```
 
 Natural next steps, roughly in order of value:
+0. **Explain the cross-window budget discrepancy** ($58 vs $81 implied,
+   see Findings). Cheapest discriminating test: check whether
+   `B_implied` correlates with the `seven_day` level at the time — if the
+   weekly-throttle hypothesis holds, windows running under a `warning`
+   weekly should show a systematically smaller 5-hour budget. There are
+   only 4 closed windows, so this is suggestive-at-best until more
+   accumulate, but it costs nothing to compute on each new one.
 1. Let the LaunchAgent keep accumulating — more closed `five_hour` windows
-   (especially ones that approach the 100% ceiling) tighten the implied
-   budget estimate.
+   (especially further saturated ones) tighten the implied budget
+   estimate.
 2. Deliberately run some real Opus-5 volume in a window that closes, to
    get a usable Opus-vs-Sonnet cost ratio to test against the official
    2.5× pricing ratio.
