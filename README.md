@@ -1,28 +1,91 @@
-# claude-utilization-cost-tracker
+# agent-quota-tracker
 
-Empirically studies how Anthropic's Claude Code utilization percentage
-(`five_hour` / `seven_day`, the numbers behind `/status` and this
-machine's statusline) relates to actual token usage per model — since
-Anthropic doesn't publish the formula, this project measures it instead
-of guessing.
+Empirically reverse-engineers how coding-agent usage-limit percentages
+(Claude Code's `five_hour` / `seven_day` utilization today — the numbers
+behind `/status`, `/usage`, and this machine's statusline) relate to
+actual token usage, since the vendor doesn't publish the formula. Named
+agent-agnostically because tracking other agents' quotas (Codex is the
+next planned target) is the point — **but as of 2026-08-27 only Claude
+Code is implemented.** See `AGENTS.md` for what adding a second source
+would involve.
 
-## Why this exists
+## How the meter works
 
-`GET https://api.anthropic.com/api/oauth/usage` (the same endpoint the
-`/usage` command and this machine's `~/.claude/statusline-usage-fetch.sh`
-call) returns only a pre-computed percentage — no raw token counts, no
-formula, nothing to reconstruct the calculation from. Official docs
-(support.claude.com) are deliberately vague: they only say "Opus costs
-several times more per turn than Sonnet, and Sonnet more than Haiku," no
-numbers. The leading third-party reverse-engineering effort
-([claudecodecamp.com](https://www.claudecodecamp.com/p/i-tried-to-reverse-engineer-claude-code-s-usage-limits))
-hypothesizes the meter is dollar-cost-weighted (using something close to
-Anthropic's own API list pricing), but that's unconfirmed.
+**The meter is a dollar meter.** Utilization is (very close to) your
+usage priced at official API rates, divided by a fixed allowance — not a
+raw token count. Confirmed 2026-08-27 by regressing the *change* in
+utilization between consecutive polls against candidate predictors, fit
+through the origin (see `analysis.ipynb`'s "Quantitative test" section):
 
-This project logs the one thing that can't be reconstructed after the
-fact (the live percentage reading) and correlates it against token usage
-recomputed from data Claude Code already keeps durably on disk, to test
-that hypothesis against this account's own usage.
+| predictor | R² |
+|---|---|
+| **dollar cost** | **0.85** |
+| output tokens | 0.65 |
+| request count | 0.49 |
+| raw token count | 0.24 |
+| cache-read tokens alone | 0.18 |
+
+Dollar cost wins because token types are priced wildly unevenly — an
+output token is **50× the price of a cache-read token** for Sonnet 5 — and
+raw counts treat them as identical.
+
+**1 percentage point of the 5-hour meter ≈ $0.73** of API-equivalent
+spend (95% CI $0.68–$0.79 per window's worth, n=58 independent
+intervals — this grows as more windows close; treat the figures on this
+page as a snapshot from 2026-08-27, `analysis.ipynb` always has the
+current live numbers). Tokens needed to move it 1pp, Sonnet 5 (Opus 5
+needs 2.5× fewer — same price ratio):
+
+| token type | price | tokens per 1pp |
+|---|---|---|
+| output (incl. thinking) | $10/MTok | 72,800 |
+| cache write, 1-hour | $4/MTok | 182,000 |
+| cache write, 5-minute | $2.50/MTok | 291,000 |
+| input (fresh) | $2/MTok | 364,000 |
+| cache read | $0.20/MTok | 3,640,000 |
+
+**Where quota actually goes**, across all logged events: cache reads
+**59.5%** of total quota (from 97.3% of all tokens — cheap per-token, but
+there's a lot of them), cache writes 28.3% (96% of that is 1-hour, not
+5-minute), output only **12.2%**. Over half your allowance is spent
+*re-reading conversation history*, not generating anything new — the
+direct, measured case for `/clear` and `/compact`.
+
+**The allowance is constant across windows.** Both the 5-hour and 7-day
+meters watch the same usage, so `Δ5h% / Δ7d%` equals the ratio of their
+two allowances with the token-weighting cancelled out entirely — a test
+that needs no cost model. That ratio holds flat at ~9.8× even in a
+window that ran with the weekly meter at 79–81% (`warning`), so the
+5-hour allowance is **not** throttled by weekly exhaustion. (An earlier
+in-project reading of a ~40% swing between windows was a bug in the
+analysis method — dividing *cumulative* cost by *cumulative* utilization
+lets a one-time attribution offset near a window's start persist through
+every later reading. Differencing *consecutive* polls instead removes it;
+see the notebook.)
+
+**⚠️ Every weekly number above is inflated 50%.** Anthropic has run a
+"Claude Code weekly limits" promotion since 2026-05-13, extended three
+times, currently ending **2026-08-31 23:59 PT**
+([clau.de/cc-50-promo](https://clau.de/cc-50-promo)) — it raises the
+*weekly* allowance only, explicitly not the 5-hour one. So the standard
+(post-promo) weekly:5-hour ratio is **~6.5×**, not 9.8×. Its expiry, a
+few days after this was written, is a free natural experiment: the ratio
+should drop to ~6.5 with the 5-hour side untouched. If polling covers
+that boundary, check whether the drop is instant (mid-window) or waits
+for the next weekly reset.
+
+**How predictable this is**: poor per-message (±53% typical error over a
+single 5-minute interval), improving to ±20–22% over ~40 minutes of usage
+as independent noise averages down — good enough per-session, useless
+per-turn. Two explanations were tested and ruled out for the per-interval
+noise: integer rounding of the reported percentage (~4% of the residual
+variance) and timing misalignment across the poll boundary (near-zero
+lag-1 autocorrelation on back-to-back polls). The remaining source is
+unidentified. The budget estimate itself is solid (±7-8% CI). Two things
+are structurally unmeasurable today, not just unmeasured: **effort
+level** (100% of logged events are `effort: "high"` — no basis for a
+coefficient) and the **Opus 2.5× pricing ratio** (assumed from list
+price, never tested — no window yet has enough Opus volume).
 
 ## Architecture
 
@@ -31,8 +94,8 @@ completely different persistence properties:
 
 ### `poll.py` — the only part that runs on a timer
 
-Deployed to `~/opt/claude-utilization-cost-tracker/`, scheduled via a launchd
-LaunchAgent (`com.jeanlescut.claude-utilization-cost-tracker`, every 5
+Deployed to `~/opt/agent-quota-tracker/`, scheduled via a launchd
+LaunchAgent (`com.jeanlescut.agent-quota-tracker`, every 5
 minutes — see `install.sh`). Each run fetches the full raw
 `/api/oauth/usage` response (unfiltered — every field, including ones
 currently `null` on this account) plus its HTTP response headers, and
@@ -74,17 +137,14 @@ to that moment.
 ./install.sh
 ```
 
-Idempotent — deploys both scripts to `~/opt/claude-utilization-cost-tracker/`,
+Idempotent — deploys both scripts to `~/opt/agent-quota-tracker/`,
 writes/refreshes the LaunchAgent plist, and (re)loads it via
-`launchctl bootstrap`. Self-migrating: detects either prior layout
-(oldest: `~/opt/utilization-tracker`, label
-`com.jeanlescut.utilization-tracker`; pre-2026-08-26 rename:
-`~/opt/claude-utilization-tracker`, label
-`com.jeanlescut.claude-utilization-tracker`) and moves it to the current
-name automatically, carrying `data/utilization-log.jsonl` forward.
+`launchctl bootstrap`. Self-migrating: detects any prior layout (see
+`AGENTS.md`'s naming history) and moves it to the current name
+automatically, carrying `data/utilization-log.jsonl` forward.
 
 ```bash
-python3 ~/opt/claude-utilization-cost-tracker/recompute_token_events.py
+python3 ~/opt/agent-quota-tracker/recompute_token_events.py
 ```
 
 Run this before any analysis session — it's what populates/refreshes
@@ -92,7 +152,7 @@ Run this before any analysis session — it's what populates/refreshes
 
 ## Data files
 
-Both live under `~/opt/claude-utilization-cost-tracker/data/` (the deployed
+Both live under `~/opt/agent-quota-tracker/data/` (the deployed
 runtime location, not this source checkout — see the dev-wide convention
 in `~/dev/CLAUDE.md`).
 
@@ -163,11 +223,14 @@ skip those rather than assume a payload is present.
 
 ## Analysis
 
-`analysis.ipynb` loads both files and plots cumulative token cost against
-observed utilization percentage, one line per reset window, for both the
-`five_hour` and `seven_day` limits — the visual check for whether the
-relationship is linear (and how consistent the implied "budget" is
-across windows).
+`analysis.ipynb` loads both files. It has two parts: an earlier
+*descriptive* section (plots cumulative token cost against observed
+utilization percentage, one line per reset window) and the later
+*quantitative* section that produced every number in "How the meter
+works" above (increment-based regression, the meter-ratio test, budget
+estimates with bootstrap CIs). Read the quantitative section's own
+warning before trusting the descriptive plots' apparent "budget" — the
+cumulative method they use has a known bug (see above).
 
 ## What "cache" means here
 
@@ -201,43 +264,37 @@ different amount depending on whether it went into a 5-minute or
 1-hour cache, and only the raw event log (not the old aggregated one)
 records which.
 
-## Findings so far (2026-08-26, see conversation history for full detail)
+## Provenance / how we got here
+
+The current model (top of this file) is the destination; this is the
+path, in case a number ever needs re-deriving or a claim needs
+re-checking against how it was found. Full blow-by-blow is in git log
+and `AGENTS.md`.
 
 - Official API pricing ratios (confirmed, `platform.claude.com/docs/en/about-claude/pricing`):
   Opus 5 = 2.5× Sonnet 5 = 5× Haiku 4.5, on both input and output tokens.
   Cache multipliers are uniform across models, relative to each model's
   own input price: 5-min write 1.25×, 1-hour write 2×, cache read 0.1×.
-- With the exact cache-duration split, 4 closed `five_hour` windows
-  implied a budget of **$57.54–$73.07** (Sonnet-only) — much tighter than
-  the **$19–$82** range produced by the old aggregated-only logger, which
-  had to bound rather than compute the cache-write cost.
-- A `five_hour` window has since saturated at **100%** (2026-08-26,
-  severity `critical`) — the first ceiling observation.
-- **The dollar-cost hypothesis now has quantitative support.** Regressing
-  the change in utilization between consecutive polls against candidate
-  predictors (fit through the origin): dollar cost R²=0.77 vs raw token
-  count R²=0.28. Implied allowance ≈ **$73.57 per 5-hour window**, 95% CI
-  [$66.32, $83.27].
-- **The allowance is the same in every window.** Because both meters watch
-  the same usage, `Δ5h% / Δ7d%` equals `B_7d / B_5h` with the token
-  weighting cancelled out — a test that needs no cost model. That ratio is
-  ~10.1× and holds even in a window that ran with the weekly meter at
-  79–81%, so the 5-hour allowance is not throttled by weekly exhaustion.
-  An earlier reading of a ~40% between-window difference turned out to be
-  an artefact of dividing cumulative cost by cumulative utilization; see
-  `analysis.ipynb`'s "Quantitative test" section.
-- **Caveat on every weekly figure**: Anthropic's +50% Claude Code weekly
-  limits promotion (2026-05-13 → 2026-08-31) was active for this entire
-  dataset. It raises the weekly limit only — 5-hour limits are explicitly
-  unaffected — so the measured ~10.1× weekly-to-5-hour ratio corresponds
-  to a standard ratio of ~6.7×. Its expiry is a dated natural experiment:
-  the ratio should drop by a third with the 5-hour side unchanged.
+- Early passes used a *cumulative*-cost-over-cumulative-utilization method
+  per window. It looked informative (implied budgets tightened from
+  $19–$82 to $57.5–$73.1 once the cache-duration split was added) but
+  carried a fatal flaw: a misattribution offset near a window's start
+  persists through every later cumulative reading, which is why the
+  method reported "stable within a window, ~40% different between
+  windows" — an artefact, not a real budget change. Superseded 2026-08-27
+  by the increment-based method (differencing consecutive polls), which
+  doesn't carry the offset.
+- The weighting-free meter-ratio test (`Δ5h%/Δ7d%`) was what actually
+  killed the leading alternative hypothesis — that the 5-hour allowance
+  shrinks when the weekly meter is nearly exhausted. It didn't: the ratio
+  held flat even at 79–81% weekly.
 - The `*_dollars` fields on every limit block, and the `spend` block's
   real money type (`{amount_minor, currency, exponent}`), are the
   strongest structural hint that the meter is dollar-denominated — but
   they are gated behind paid usage credits and are null in every payload
   logged. `analysis.ipynb` re-checks them on every run and reports
   loudly if that ever changes.
-- Still missing for a fully precise mapping: confirmation of the
-  weighting formula itself (still a hypothesis), more closed windows
-  (only 4 so far), and enough Opus 5 volume for a per-model ratio.
+- Still missing for a fully precise mapping: a tested (not assumed) Opus
+  price ratio, any effort-level data at all, and an explanation for the
+  ~23% residual variance in the per-interval regression (ruled out so
+  far: rounding error, ~2% of it; timing misalignment, none detected).

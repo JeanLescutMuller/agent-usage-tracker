@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
-# Deploys the utilization/cost poller to ~/opt/claude-utilization-cost-tracker
-# and schedules it via a launchd LaunchAgent (every 5 minutes). Idempotent -
-# safe to re-run any time, including on a fresh machine. Self-migrating -
-# detects either prior layout (oldest: ~/opt/utilization-tracker,
-# com.jeanlescut.utilization-tracker; pre-2026-08-26 rename:
-# ~/opt/claude-utilization-tracker, com.jeanlescut.claude-utilization-tracker)
-# and moves it to the current one, carrying data/utilization-log.jsonl
-# forward (the one file here that can't be recomputed - see poll.py's
-# docstring).
+# Deploys the quota poller to ~/opt/agent-quota-tracker and schedules it via
+# a launchd LaunchAgent (every 5 minutes). Idempotent - safe to re-run any
+# time, including on a fresh machine. Self-migrating - detects any prior
+# layout (oldest: ~/opt/utilization-tracker, com.jeanlescut.utilization-tracker;
+# 2026-08-26: ~/opt/claude-utilization-tracker,
+# com.jeanlescut.claude-utilization-tracker; later 2026-08-26:
+# ~/opt/claude-utilization-cost-tracker, com.jeanlescut.claude-utilization-cost-tracker
+# - renamed again 2026-08-27 to drop the Claude-specific name, since this
+# project now also tracks other coding agents' quotas, e.g. Codex) and moves
+# it to the current one, carrying data/utilization-log.jsonl forward (the
+# one file here that can't be recomputed - see poll.py's docstring).
 #
 # Usage: ./install.sh
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FOLDER_PROD="$HOME/opt/claude-utilization-cost-tracker"
+FOLDER_PROD="$HOME/opt/agent-quota-tracker"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-LABEL="com.jeanlescut.claude-utilization-cost-tracker"
+LABEL="com.jeanlescut.agent-quota-tracker"
 REAL_PLIST="$FOLDER_PROD/$LABEL.plist"
 LINK_PLIST="$LAUNCH_AGENTS/$LABEL.plist"
 
@@ -37,11 +39,12 @@ migrate_legacy() {
 }
 migrate_legacy "$HOME/opt/utilization-tracker" "com.jeanlescut.utilization-tracker"
 migrate_legacy "$HOME/opt/claude-utilization-tracker" "com.jeanlescut.claude-utilization-tracker"
+migrate_legacy "$HOME/opt/claude-utilization-cost-tracker" "com.jeanlescut.claude-utilization-cost-tracker"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
 
-# Real files live in ~/opt/claude-utilization-cost-tracker/ (code + data +
+# Real files live in ~/opt/agent-quota-tracker/ (code + data +
 # the plist itself); ~/Library/LaunchAgents/ only ever holds a symlink into it
 # - see ~/dev/CLAUDE.md. Deliberately NOT wiping FOLDER_PROD before copying
 # (unlike auto-commit's deploy script) - data/utilization-log.jsonl is the
