@@ -226,6 +226,12 @@ records which.
   An earlier reading of a ~40% between-window difference turned out to be
   an artefact of dividing cumulative cost by cumulative utilization; see
   `analysis.ipynb`'s "Quantitative test" section.
+- **Caveat on every weekly figure**: Anthropic's +50% Claude Code weekly
+  limits promotion (2026-05-13 → 2026-08-31) was active for this entire
+  dataset. It raises the weekly limit only — 5-hour limits are explicitly
+  unaffected — so the measured ~10.1× weekly-to-5-hour ratio corresponds
+  to a standard ratio of ~6.7×. Its expiry is a dated natural experiment:
+  the ratio should drop by a third with the 5-hour side unchanged.
 - The `*_dollars` fields on every limit block, and the `spend` block's
   real money type (`{amount_minor, currency, exponent}`), are the
   strongest structural hint that the meter is dollar-denominated — but

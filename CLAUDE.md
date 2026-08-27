@@ -221,6 +221,30 @@ This is exactly what `/clear` and `/compact` exist to reset/shrink.
   (n=22, much weaker — coarse quantisation). Prefer the meter-ratio
   figure (7d ≈ 10.1 × a 5h window ≈ $740) over the direct 7-day fit,
   since the ratio needs no cost model at all.
+- **⚠️ All weekly figures above are inflated by an active promotion.**
+  Anthropic's **+50% Claude Code weekly limits promo** has run since
+  2026-05-13 and currently ends **2026-08-31 23:59 PT** (09-01 06:59
+  UTC); it has already been extended three times (originally to 08-19).
+  It raises the **weekly** limit only — the support article states
+  outright that "5-hour usage limits are not affected". So:
+  - the 5-hour results (`B_5h`, per-token table, the dollar fit) stand;
+  - every weekly number is 1.5× the standard allowance — the measured
+    ~10.1× ratio corresponds to a standard **~6.7×**, i.e. post-promo a
+    week is worth about **6.7 saturated 5-hour windows, not ~10**;
+  - the promo began ~103 days before our first poll, so it explains
+    nothing that varies *within* this dataset, and is consistent with the
+    flat ratio we measured.
+  Source: `clau.de/cc-50-promo` →
+  support.claude.com/en/articles/15910845.
+- **The promo expiry is a free natural experiment — don't miss it.** When
+  it lapses the weekly allowance drops by a third with the 5-hour side
+  unchanged, so the ratio should fall ~10.1 → ~6.7. The current weekly
+  window resets 08-31 19:00 UTC and the promo dies ~12h into it, so we
+  can also see whether the allowance changes mid-window (reported weekly
+  % should jump ~1.5× instantly for unchanged usage) or only from the
+  09-07 reset. **Keep the LaunchAgent polling across 08-31/09-01** — this
+  is a dated, externally-forced change, and a far stronger test of the
+  framework than passively accumulating more windows.
 - The `$-cost` view in `analysis.ipynb` visually aligns the `five_hour`
   windows into a noticeably tighter single trend line than the raw-token-
   count view — early qualitative support for the dollar-cost hypothesis,
