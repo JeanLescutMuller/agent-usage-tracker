@@ -180,38 +180,47 @@ This is exactly what `/clear` and `/compact` exist to reset/shrink.
   a Sonnet-only budget of **$57.54–$73.07** — much tighter than the
   $19–$82 range the old aggregated-only logger produced.
 - **A `five_hour` window has now saturated at 100%** (2026-08-26
-  08:50→13:50, severity `critical`, closed). This is the first ceiling
-  observation — earlier notes saying no window came near 100% are
-  superseded. It also surfaced a problem: **the implied budget is not
-  constant across windows.** Within a single window `B_implied` is very
-  stable (window 08-24: $57.5–$59.7 across 31–53%; the saturated window:
-  $80.5–$82.1 across 60–68%), but *between* those two windows it differs
-  by ~40%. A fixed dollar budget cannot explain both. Model mix doesn't
-  explain it either: the saturated window's Sonnet-only cost alone
-  ($49.79 by 68%) already exceeds the whole $58 budget the 08-24 window
-  implied, so no Opus re-weighting can reconcile them. Untested
-  candidates, in order of plausibility:
-  1. the 5-hour allowance is *reduced when the weekly limit is nearly
-     exhausted* — the $58 window ran while `seven_day` sat at 79–81%
-     (`warning`), the $81 window while it was at ~15–18% (`normal`);
-  2. ~~usage from clients that write no local transcript~~ — **largely
-     ruled out on 2026-08-26.** Test: for every pair of consecutive polls
-     inside one window where utilization *rose*, check whether local token
-     events explain the rise. Result: **0 of 36 intervals unexplained** —
-     every observed movement of the meter is accounted for by local usage.
-     Caveat: this only covers intervals where two consecutive polls exist,
-     i.e. ~53% of elapsed time (see the poll-coverage gotcha), so usage
-     hiding entirely inside an un-polled gap remains possible. Worth
-     re-running as coverage improves — it's cheap and it's the one
-     hypothesis that can be falsified from existing data alone.
-     (When re-running: **re-run `recompute_token_events.py` first.** A
-     stale events file makes the current session's own usage look like
-     phantom external usage — that false positive appeared on the first
-     attempt at this test.)
-  3. the cost model is missing a term (a per-request floor, or web
-     search/fetch server-tool billing).
-  Resolving this is now the most valuable open question in the project —
-  more so than accumulating further windows blindly.
+  08:50→13:50, severity `critical`, closed) — the first ceiling
+  observation. Earlier notes saying no window came near 100% are
+  superseded.
+- **The budget does NOT vary between windows — that was an artefact.**
+  An earlier pass reported implied budgets of $57.5–$59.7 in one window
+  vs $80.5–$82.1 in another and treated it as a real ~40% difference,
+  with weekly-throttling as the leading explanation. Both conclusions
+  were wrong, for two separate reasons, and `analysis.ipynb`'s
+  "Quantitative test" section now supersedes them:
+  1. **The cumulative method manufactures the spread.** Dividing a
+     window's cumulative cost by its cumulative utilization gives every
+     later reading the *same* misattribution offset picked up near the
+     window start — which is exactly why the implied budget looked stable
+     *within* a window and different *between* them. It was one offset
+     per window, not a moving budget. Always difference consecutive polls
+     instead; that cancels the offset.
+  2. **A weighting-free test kills the throttle hypothesis outright.**
+     Both meters observe the same usage, so `Δ5h% / Δ7d% = B_7d / B_5h`
+     with the weighting cancelled — no cost model needed. That ratio is
+     **~10.1×**, essentially constant across every segment with enough
+     7-day movement to be meaningful, *including* the 08-24 segment that
+     ran with the weekly meter at 79–81% (`warning`). The 5-hour
+     allowance is not reduced when the weekly is nearly exhausted.
+  A corollary worth keeping: a single-dimension reweighting test done
+  under the cumulative method demanded *negative* weights (1h-cache
+  −0.67×, cache-read −0.23× with a negative budget). Those impossible
+  values were a symptom of the broken method, not evidence about pricing.
+- **Quantitative support for the dollar-cost hypothesis (first real
+  measurement, 2026-08-26).** Regressing per-interval Δ5h on candidate
+  predictors, fit through the origin:
+  `dollar_cost` R²=0.77, `output_tokens` 0.57, `n_requests` 0.50,
+  `raw_tokens` 0.28, `cache_read_tokens` 0.22. Dollar-weighted cost beats
+  a raw token count by a wide margin — raw tokens price a cache read the
+  same as an output token, and the data rejects that. Adding a fixed
+  per-request term to the cost model improves R² by 0.0003, so there is
+  no evidence of a meaningful per-request charge.
+- **Current budget estimates**: 5-hour ≈ **$73.57**, 95% CI
+  [$66.32, $83.27] (n=46 intervals). 7-day ≈ $603.77, CI [$516, $718]
+  (n=22, much weaker — coarse quantisation). Prefer the meter-ratio
+  figure (7d ≈ 10.1 × a 5h window ≈ $740) over the direct 7-day fit,
+  since the ratio needs no cost model at all.
 - The `$-cost` view in `analysis.ipynb` visually aligns the `five_hour`
   windows into a noticeably tighter single trend line than the raw-token-
   count view — early qualitative support for the dollar-cost hypothesis,

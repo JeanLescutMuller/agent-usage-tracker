@@ -212,13 +212,20 @@ records which.
   the **$19–$82** range produced by the old aggregated-only logger, which
   had to bound rather than compute the cache-write cost.
 - A `five_hour` window has since saturated at **100%** (2026-08-26,
-  severity `critical`), giving the first ceiling observation — and with
-  it a complication: the implied budget is very stable *within* a window
-  but differs ~40% *between* windows ($57.5–$59.7 vs $80.5–$82.1). A
-  single fixed dollar budget can't explain both, and the gap is too large
-  to be Opus mispricing. See `CLAUDE.md`'s Findings section for the
-  candidate explanations (weekly-limit throttling, usage from clients
-  that write no local transcript, or a missing cost term).
+  severity `critical`) — the first ceiling observation.
+- **The dollar-cost hypothesis now has quantitative support.** Regressing
+  the change in utilization between consecutive polls against candidate
+  predictors (fit through the origin): dollar cost R²=0.77 vs raw token
+  count R²=0.28. Implied allowance ≈ **$73.57 per 5-hour window**, 95% CI
+  [$66.32, $83.27].
+- **The allowance is the same in every window.** Because both meters watch
+  the same usage, `Δ5h% / Δ7d%` equals `B_7d / B_5h` with the token
+  weighting cancelled out — a test that needs no cost model. That ratio is
+  ~10.1× and holds even in a window that ran with the weekly meter at
+  79–81%, so the 5-hour allowance is not throttled by weekly exhaustion.
+  An earlier reading of a ~40% between-window difference turned out to be
+  an artefact of dividing cumulative cost by cumulative utilization; see
+  `analysis.ipynb`'s "Quantitative test" section.
 - The `*_dollars` fields on every limit block, and the `spend` block's
   real money type (`{amount_minor, currency, exponent}`), are the
   strongest structural hint that the meter is dollar-denominated — but
