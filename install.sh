@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Deploys the quota poller to ~/opt/agent-quota-tracker and schedules it via
-# a launchd LaunchAgent (every 5 minutes). Idempotent - safe to re-run any
-# time, including on a fresh machine. Self-migrating - detects any prior
-# layout (oldest: ~/opt/utilization-tracker, com.jeanlescut.utilization-tracker;
+# Deploys the quota pollers to ~/opt/agent-quota-tracker and schedules them
+# via a single launchd LaunchAgent (every 5 minutes, running poll_all.py -
+# see its docstring for why one job runs two subprocesses instead of two
+# jobs). Idempotent - safe to re-run any time, including on a fresh
+# machine. Self-migrating - detects any prior layout (oldest:
+# ~/opt/utilization-tracker, com.jeanlescut.utilization-tracker;
 # 2026-08-26: ~/opt/claude-utilization-tracker,
 # com.jeanlescut.claude-utilization-tracker; later 2026-08-26:
 # ~/opt/claude-utilization-cost-tracker, com.jeanlescut.claude-utilization-cost-tracker
 # - renamed again 2026-08-27 to drop the Claude-specific name, since this
-# project now also tracks other coding agents' quotas, e.g. Codex) and moves
-# it to the current one, carrying data/utilization-log.jsonl forward (the
-# one file here that can't be recomputed - see poll.py's docstring).
+# project now also tracks other coding agents' quotas, e.g. Codex, which
+# landed 2026-08-30 as poll_codex.py) and moves it to the current one,
+# carrying data/utilization-log.jsonl forward (the one file here that
+# can't be recomputed - see poll_claude.py's docstring).
 #
 # Usage: ./install.sh
 set -euo pipefail
@@ -49,17 +52,20 @@ PYTHON3="$(command -v python3)"
 # - see ~/dev/CLAUDE.md. Deliberately NOT wiping FOLDER_PROD before copying
 # (unlike auto-commit's deploy script) - data/utilization-log.jsonl is the
 # append-only log this tool exists to accumulate, and must survive a
-# re-install (it can't be recomputed - see poll.py's docstring).
+# re-install (it can't be recomputed - see poll_claude.py's docstring).
 mkdir -p "$FOLDER_PROD/data"
 mkdir -p "$LAUNCH_AGENTS"
 
-cp "$SRC/poll.py" "$FOLDER_PROD/poll.py"
-chmod +x "$FOLDER_PROD/poll.py"
+for f in poll_claude.py poll_codex.py poll_all.py; do
+    cp "$SRC/$f" "$FOLDER_PROD/$f"
+    chmod +x "$FOLDER_PROD/$f"
+done
+rm -f "$FOLDER_PROD/poll.py"  # stale pre-2026-08-30 name, before the poll_claude.py/poll_codex.py split
 
 # Not scheduled - recompute_token_events.py is run by hand at analysis
 # time, rebuilding data/token-events.jsonl fresh from the transcripts
 # Claude Code already keeps under ~/.claude/projects/. Deployed here anyway
-# so it's available wherever poll.py's data/ actually lives.
+# so it's available wherever the pollers' data/ actually lives.
 cp "$SRC/recompute_token_events.py" "$FOLDER_PROD/recompute_token_events.py"
 chmod +x "$FOLDER_PROD/recompute_token_events.py"
 
@@ -75,7 +81,7 @@ tee "$REAL_PLIST" >/dev/null <<EOF
     <key>ProgramArguments</key>
     <array>
         <string>$PYTHON3</string>
-        <string>$FOLDER_PROD/poll.py</string>
+        <string>$FOLDER_PROD/poll_all.py</string>
     </array>
 
     <!-- Run every 5 minutes -->

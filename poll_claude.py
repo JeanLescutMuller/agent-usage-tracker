@@ -104,6 +104,7 @@ def main() -> None:
     d_record = {
         "ts": int(time.time()),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": "claude",
         "api": d_api,
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise

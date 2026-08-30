@@ -1,13 +1,15 @@
 # agent-quota-tracker
 
 Empirically reverse-engineers how coding-agent usage-limit percentages
-(Claude Code's `five_hour` / `seven_day` utilization today — the numbers
-behind `/status`, `/usage`, and this machine's statusline) relate to
-actual token usage, since the vendor doesn't publish the formula. Named
-agent-agnostically because tracking other agents' quotas (Codex is the
-next planned target) is the point — **but as of 2026-08-27 only Claude
-Code is implemented.** See `AGENTS.md` for what adding a second source
-would involve.
+(Claude Code's `five_hour` / `seven_day` utilization, and — since
+2026-08-30 — Codex's structurally identical `primary` / `secondary`
+rate limits) relate to actual usage, since neither vendor publishes the
+formula. Two pollers, one shared log: `poll_claude.py` hits Anthropic's
+`GET /api/oauth/usage`; `poll_codex.py` speaks the JSON-RPC protocol
+Codex's own TUI statusline uses (`codex app-server --stdio`), since Codex
+has no plain HTTP equivalent. See `AGENTS.md` for the schema and the
+asymmetries between the two sources (Codex reports real dollar figures
+directly for some calls; Claude's are always inferred by regression).
 
 ## How the meter works
 
@@ -89,25 +91,36 @@ price, never tested — no window yet has enough Opus volume).
 
 ## Architecture
 
-Two very different halves, because the two things being tracked have
-completely different persistence properties:
+Three scripts, because the things being tracked have completely
+different persistence properties, and two independent sources shouldn't
+share a failure mode:
 
-### `poll.py` — the only part that runs on a timer
+### `poll_claude.py` + `poll_codex.py` — the parts that run on a timer
 
-Deployed to `~/opt/agent-quota-tracker/`, scheduled via a launchd
-LaunchAgent (`com.jeanlescut.agent-quota-tracker`, every 5
-minutes — see `install.sh`). Each run fetches the full raw
-`/api/oauth/usage` response (unfiltered — every field, including ones
-currently `null` on this account) plus its HTTP response headers, and
-appends one record to `data/utilization-log.jsonl`.
+Deployed to `~/opt/agent-quota-tracker/`, scheduled via a single launchd
+LaunchAgent (`com.jeanlescut.agent-quota-tracker`, every 5 minutes — see
+`install.sh`) that runs `poll_all.py`, which in turn runs each poller as
+its own subprocess (so one crashing can't stop the other).
 
-This side **must** be polled: the endpoint has no history. A missed
+`poll_claude.py` fetches the full raw `/api/oauth/usage` response
+(unfiltered — every field, including ones currently `null` on this
+account) plus its HTTP response headers. `poll_codex.py` has no HTTP
+endpoint to hit — Codex exposes rate-limit/usage data only via a
+JSON-RPC method on `codex app-server` (the same protocol its own TUI
+statusline uses), so it spawns `codex app-server --stdio`, does the
+`initialize` handshake, then calls `account/rateLimits/read` and
+`account/usage/read`. Both append one record each to the same
+`data/utilization-log.jsonl`, disambiguated by a `source` field.
+
+This side **must** be polled: neither endpoint has history. A missed
 5-minute window is a permanently lost reading — there is no way to ask
 "what was my utilization at 3pm yesterday" after the fact.
 
 ### `recompute_token_events.py` — not scheduled, run by hand
 
-Rebuilds `data/token-events.jsonl` from scratch by scanning every
+Claude-only (Codex's local session files don't store token counts, so
+there's no equivalent scan possible there — see `AGENTS.md`). Rebuilds
+`data/token-events.jsonl` from scratch by scanning every
 `*.jsonl` transcript Claude Code itself writes under
 `~/.claude/projects/`. One record per individual assistant message that
 carries token usage, full fidelity — model, reasoning effort,
@@ -137,7 +150,7 @@ to that moment.
 ./install.sh
 ```
 
-Idempotent — deploys both scripts to `~/opt/agent-quota-tracker/`,
+Idempotent — deploys all three scripts to `~/opt/agent-quota-tracker/`,
 writes/refreshes the LaunchAgent plist, and (re)loads it via
 `launchctl bootstrap`. Self-migrating: detects any prior layout (see
 `AGENTS.md`'s naming history) and moves it to the current name
@@ -156,11 +169,14 @@ Both live under `~/opt/agent-quota-tracker/data/` (the deployed
 runtime location, not this source checkout — see the dev-wide convention
 in `~/dev/CLAUDE.md`).
 
-**`utilization-log.jsonl`** — one record per poll tick:
+**`utilization-log.jsonl`** — one record per poll tick, shared by both
+pollers, disambiguated by `source` (added 2026-08-30; rows before that
+have no `source` key — they're all Claude). Claude rows:
 ```jsonc
 {
   "ts": 1787736614,                       // epoch seconds
   "iso": "2026-08-26T09:30:14Z",
+  "source": "claude",
   "api": { /* full raw /api/oauth/usage response, or null on failure */ },
   // ^ 17 top-level keys. Besides five_hour/seven_day (each with
   //   utilization, resets_at, and always-null limit/used/remaining_dollars):
@@ -196,6 +212,36 @@ Rows written before 2026-08-26 have an older schema (`token_deltas` /
 reading the full file history. Rows where the Keychain read or the HTTP
 call failed have `api: null` (~11% of rows so far) — every consumer must
 skip those rather than assume a payload is present.
+
+Codex rows (since 2026-08-30):
+```jsonc
+{
+  "ts": 1788081319, "iso": "2026-08-30T09:15:19Z",
+  "source": "codex",
+  "codex_rate_limits": {                  // raw account/rateLimits/read result, or null on failure
+    "rateLimits": {
+      "primary":   {"usedPercent": 0, "windowDurationMins": 300,   "resetsAt": 1788099318},
+      "secondary": {"usedPercent": 0, "windowDurationMins": 10080, "resetsAt": 1788686118},
+      "credits": {"hasCredits": false, "unlimited": false, "balance": "0"},
+      "planType": "plus", "rateLimitReachedType": null
+    },
+    "rateLimitResetCredits": { /* Codex's own equivalent of Anthropic's +50% promo - named, dated reset grants */ }
+  },
+  "codex_usage": {                        // raw account/usage/read result, or null on failure
+    "summary": {"lifetimeTokens": 263867715, "peakDailyTokens": 84197579,
+                "longestRunningTurnSec": 3635, "currentStreakDays": 20, "longestStreakDays": 20},
+    "dailyUsageBuckets": [ {"startDate": "2026-08-10", "tokens": 144710}, /* ... */ ],
+    "threadUsage": null                   // only populated when called with a threadId - see AGENTS.md
+  },
+  "error": null
+}
+```
+`primary`/`secondary` map onto Claude's `five_hour`/`seven_day` — same
+two-tier shape, 300 min and 10,080 min (7-day) windows respectively.
+`poll_codex.py`'s `error` field uses the same `{stage, type, detail?}`
+convention as `poll_claude.py`, with stages `spawn` (the `codex` binary
+couldn't be started), `timeout`, `rpc` (a JSON-RPC error response, e.g.
+not logged in), and `parse`.
 
 **`token-events.jsonl`** — one record per assistant message with usage:
 ```jsonc

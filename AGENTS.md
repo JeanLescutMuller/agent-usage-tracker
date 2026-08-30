@@ -9,18 +9,44 @@ so a fresh session doesn't have to re-derive any of it.
 
 ## What this project is
 
-**As of 2026-08-27 this project measures Claude Code only.** It was
-renamed from `claude-utilization-cost-tracker` on 2026-08-27 in
-*anticipation* of also tracking Codex's quota — the user's stated intent —
-but no second source exists yet: there is one poller (`poll.py`, hitting
-Anthropic's endpoint below) and everything below describes Claude Code
-specifically. Adding Codex support means a second poller writing the same
-`utilization-log.jsonl` shape (see the schema note in README.md before
-building it, and update this section once it lands) plus, if
-Codex/OpenAI exposes an equivalent to Claude Code's own transcripts, a
-second recompute script). The file names deliberately stayed source-
-agnostic already (`utilization-log.jsonl`, `token-events.jsonl`, no
-"claude" in either) - only the repo/folder/plist name needed to catch up.
+**As of 2026-08-30 this project tracks Claude Code and Codex.** Two
+pollers write to the same `data/utilization-log.jsonl`, disambiguated by
+a `source` field: `poll_claude.py` (renamed from `poll.py` — hits
+Anthropic's `GET /api/oauth/usage`, see below) and `poll_codex.py` (new —
+Codex has no plain HTTP usage endpoint; it speaks JSON-RPC to `codex
+app-server --stdio` instead, the same protocol Codex's own TUI
+statusline uses to render its rate-limit display — confirmed by reading
+`~/.codex/statusline-command.sh` and grepping `~/.codex/logs_2.sqlite`
+for `rpc.method="account/rateLimits/read"`, then live-tested end to end).
+`poll_all.py` runs both as subprocesses and is what the LaunchAgent
+actually schedules — see `poll_all.py`'s docstring for why subprocess
+isolation over a plain import. Rows from before 2026-08-30 have no
+`source` field at all; they're all Claude readings (see `analysis.ipynb`'s
+loader, which defaults a missing `source` to `"claude"`).
+
+Codex's shape maps directly onto Claude's: `account/rateLimits/read`
+returns `rateLimits.primary`/`.secondary`, each `{usedPercent, resetsAt,
+windowDurationMins}` — 300 min (5-hour) and 10,080 min (7-day)
+respectively, i.e. structurally the same two-tier limit Claude Code
+exposes as `five_hour`/`seven_day`. `poll_codex.py` also logs
+`account/usage/read`'s result (`codex_usage` field) — lifetime/peak/streak
+token summary and a daily-bucket history; useful context, not yet used
+for any regression (see "Natural next steps" below).
+
+**One asymmetry worth knowing going in:** Codex's `account/usage/read`,
+called *with* a `threadId`, reports real
+`estimatedUsageUsdMicros`/`estimatedUsageCreditsMicros` per thread —
+actual dollar-equivalent spend, not an inferred model. Claude's API never
+populates its analogous `*_dollars` fields (see "Payload surface" in the
+notebook) — this project had to *infer* a dollar-cost weighting by
+regression instead. Codex may let this project validate that hypothesis
+directly rather than infer it, once a `recompute_codex_events.py`
+analogue exists to enumerate thread ids and pull their usage. Also note:
+Codex's local session rollout files (`~/.codex/sessions/**/*.jsonl`) do
+**not** store token counts at all (confirmed empirically), unlike Claude
+Code's transcripts — so there's no local-file equivalent of
+`recompute_token_events.py` for Codex; any token/cost detail has to come
+from that per-thread RPC call, not from parsing local files.
 
 Anthropic's `GET https://api.anthropic.com/api/oauth/usage` (the endpoint
 behind `/status` and this machine's statusline) returns only a pre-computed
@@ -41,9 +67,9 @@ pricing.
 ## Repo ↔ deploy layout (standard convention, see `~/dev/CLAUDE.md` / `~/.claude/CLAUDE.md`)
 
 - `~/dev/agent-quota-tracker/` — this git repo, source of truth for code. **Never edit the deployed copy directly.**
-- `~/opt/agent-quota-tracker/` — deployed runtime copy: `poll.py`, `recompute_token_events.py`, the LaunchAgent plist, and `data/` (the actual logs — gitignored, lives only here). Edit code in `~/dev`, then re-run `./install.sh` to redeploy.
+- `~/opt/agent-quota-tracker/` — deployed runtime copy: `poll_claude.py`, `poll_codex.py`, `poll_all.py`, `recompute_token_events.py`, the LaunchAgent plist, and `data/` (the actual logs — gitignored, lives only here). Edit code in `~/dev`, then re-run `./install.sh` to redeploy.
 - `~/Library/LaunchAgents/com.jeanlescut.agent-quota-tracker.plist` — symlink only, points into `~/opt/.../`. Never a real file there.
-- LaunchAgent runs `poll.py` every 5 minutes (`StartInterval=300`).
+- LaunchAgent runs `poll_all.py` every 5 minutes (`StartInterval=300`), which runs `poll_claude.py` then `poll_codex.py` as subprocesses.
 
 ## Naming history (in case anything still references an old name)
 
@@ -51,7 +77,7 @@ Renamed three times, most recently 2026-08-27:
 1. `utilization-tracker` / `com.jeanlescut.utilization-tracker` (original, pre-2026-08-26)
 2. → `claude-utilization-tracker` / `com.jeanlescut.claude-utilization-tracker` (2026-08-26)
 3. → `claude-utilization-cost-tracker` / `com.jeanlescut.claude-utilization-cost-tracker` (2026-08-26, later same day — folded in the $-cost-weighting hypothesis, which the plain "utilization-tracker" name didn't capture)
-4. → `agent-quota-tracker` / `com.jeanlescut.agent-quota-tracker` (current, 2026-08-27 — dropped the Claude-specific name: this project is meant to track other coding agents' quotas too, starting with Codex. See "What this project is" above for current scope — naming got ahead of implementation on this rename)
+4. → `agent-quota-tracker` / `com.jeanlescut.agent-quota-tracker` (current, 2026-08-27 — dropped the Claude-specific name: this project is meant to track other coding agents' quotas too, starting with Codex. Naming got ahead of implementation at the time of this rename — the Codex poller itself landed 2026-08-30, see "What this project is" above)
 
 `install.sh` self-migrates from *any* prior layout automatically
 (`migrate_legacy()` helper, called once per prior name) — carries `data/`
@@ -60,21 +86,33 @@ Idempotent, safe to re-run any time. If you ever see a fifth rename, add a
 fifth `migrate_legacy` call rather than deleting the old ones — each is a
 no-op once its source folder is gone, so there's no cost to keeping them.
 
-## Architecture: why the two scripts are so different
+## Architecture: why the scripts are split this way
 
 This is the single most important design decision in this repo — don't
 "simplify" it back to one incremental logger without re-reading this.
 
-- **`poll.py`** — runs on the LaunchAgent timer. Does exactly one thing:
-  append the full raw `/api/oauth/usage` response + selected HTTP headers
-  to `data/utilization-log.jsonl`. This **must** be polled: the endpoint
-  has no history, so a missed 5-minute tick is a permanently lost reading.
+- **`poll_claude.py`** — runs on the LaunchAgent timer (via `poll_all.py`,
+  see below). Does exactly one thing: append the full raw `/api/oauth/usage`
+  response + selected HTTP headers to `data/utilization-log.jsonl`, tagged
+  `source: "claude"`. This **must** be polled: the endpoint has no
+  history, so a missed 5-minute tick is a permanently lost reading.
+- **`poll_codex.py`** — same rationale, same file, `source: "codex"`.
+  Spawns `codex app-server --stdio` and speaks JSON-RPC (`initialize`,
+  `account/rateLimits/read`, `account/usage/read`) instead of a plain
+  HTTP GET, since that's the only interface Codex exposes for this.
+  Logs the raw `account/*` results under `codex_rate_limits`/`codex_usage`
+  keys, alongside the same `error` convention as `poll_claude.py`.
+- **`poll_all.py`** — the actual LaunchAgent target. Runs the two pollers
+  above as subprocesses (not imports), so one crashing can't stop the
+  other. Each poller stays fully runnable standalone by hand.
 - **`recompute_token_events.py`** — **not** scheduled, run by hand (or at
   the top of `analysis.ipynb`'s workflow). Fully rebuilds
   `data/token-events.jsonl` from scratch every time, by scanning every
   `*.jsonl` under `~/.claude/projects/`. Stateless — no byte offsets, no
   incremental state, just overwrite-on-demand via a `.tmp` + atomic
-  `.replace()`.
+  `.replace()`. Claude-only: Codex's local session files don't store
+  token counts, so there's no equivalent scan possible there yet (see
+  "Natural next steps" for the per-thread-RPC alternative).
 
 **Standing rule for this project: only log data that has no other durable
 source.** Token usage is *not* logged on a timer, on purpose, because it's
@@ -96,8 +134,8 @@ check `cleanupPeriodDays` is still 365 first — if it's been dropped back to
 
 Full JSON schema examples are in `README.md`. Quick summary:
 
-- `data/utilization-log.jsonl` — one record per poll tick, `{ts, iso, api, api_headers}`. Rows written before 2026-08-26 have an older schema (`token_deltas`/`baseline` fields, no `api_headers`) — handle both shapes if reading full history.
-- `data/token-events.jsonl` — one record per assistant message with usage, full fidelity (model, effort, session/cwd/sidechain identity, verbatim `usage` object including the `cache_creation` 5m/1h split and `output_tokens_details.thinking_tokens`). Deliberately excludes message content.
+- `data/utilization-log.jsonl` — one record per poll tick, shared by both pollers. Claude rows: `{ts, iso, source: "claude", api, api_headers, error}`. Codex rows (since 2026-08-30): `{ts, iso, source: "codex", codex_rate_limits, codex_usage, error}`. Rows written before 2026-08-30 have no `source` key at all — treat missing as `"claude"`. Rows written before 2026-08-26 have an even older schema (`token_deltas`/`baseline` fields, no `api_headers`) — handle all shapes if reading full history.
+- `data/token-events.jsonl` — one record per assistant message with usage, full fidelity (model, effort, session/cwd/sidechain identity, verbatim `usage` object including the `cache_creation` 5m/1h split and `output_tokens_details.thinking_tokens`). Deliberately excludes message content. Claude-only (see "Architecture" above).
 
 As of 2026-08-27: 440 utilization poll rows (390 with a usable payload —
 ~11% were failed fetches, now with a recorded reason — see the `error`
@@ -105,8 +143,9 @@ field below), 15,278 token events (back to 2026-07-30, though polling
 didn't start until 2026-08-24 — so `seven_day` correlation has sparse
 coverage for the first several days of that range). These counts grow
 continuously; re-check with `wc -l` rather than trusting this snapshot.
-`poll.py` writes a row with `api: null` when the
-Keychain read or the HTTP call fails, and every consumer must skip those.
+`poll_claude.py` writes a row with `api: null` (and `poll_codex.py` a row
+with `codex_rate_limits: null`) when the fetch fails, and every consumer
+must skip those.
 
 ## Known gotchas / bugs already fixed (don't reintroduce)
 
@@ -385,19 +424,29 @@ dead), so it's off this list:
    weekly window's promo dies ~12h after it opens) or only at the next
    weekly reset (09-07) — that tells you how Anthropic implements a
    limit change mid-cycle, which is useful beyond just this promo.
-1. **Build the Codex poller** (see "What this project is" above) — the
-   reason for this project's rename. Same shape as `poll.py`: hit
-   whatever endpoint Codex/OpenAI exposes for quota, append to
-   `utilization-log.jsonl` (add a `source` field to distinguish rows once
-   there's more than one). Needs research first: does an equivalent
-   endpoint even exist, and does OpenAI keep local transcripts the way
-   Claude Code does (needed for a `recompute_token_events.py` analogue)?
-2. Deliberately run real Opus-5 volume in a window that closes, to get a
+1. **Build `recompute_codex_events.py`.** `poll_codex.py` landed
+   2026-08-30 and gives the rate-limit trajectory, but not yet a
+   token/cost breakdown — that needs `account/usage/read` called *per
+   thread id* (enumerable from `~/.codex/sessions/`), not a local-file
+   scan (Codex transcripts don't carry token counts — see "What this
+   project is" above). This is what would let the notebook's new "Codex"
+   section do more than confirm the poller works.
+2. **Validate the dollar-cost hypothesis directly on Codex**, once #1
+   exists: `account/usage/read`'s per-thread
+   `estimatedUsageUsdMicros`/`estimatedUsageCreditsMicros` is a real
+   reported dollar figure, not an inferred one. Compare it against
+   `usedPercent` movement the same way the Claude section regresses
+   `dollar_cost` against `five_hour_pct` — except here you can check
+   whether the reported $ *directly* predicts the meter, without needing
+   a pricing table or a regression at all. If it does, that's strong
+   independent confirmation of the whole dollar-cost framework this
+   project is built on.
+3. Deliberately run real Opus-5 volume in a window that closes, to get a
    tested (not assumed) Opus-vs-Sonnet cost ratio against the official
    2.5× pricing ratio — still no window has enough Opus volume for this.
-3. Deliberately run a few sessions at low/medium effort — still 100%
+4. Deliberately run a few sessions at low/medium effort — still 100%
    high-effort data, so this coefficient is entirely unmeasured.
-4. Track down the ~20% unidentified residual variance in the per-interval
+5. Track down the ~20% unidentified residual variance in the per-interval
    regression (see Findings' Predictability bullet). Rounding and timing
    misalignment are ruled out; untested candidates include sub-minute
-   reporting lag and effort-level variation (which needs #3 first).
+   reporting lag and effort-level variation (which needs #4 first).
