@@ -33,20 +33,37 @@ exposes as `five_hour`/`seven_day`. `poll_codex.py` also logs
 token summary and a daily-bucket history; useful context, not yet used
 for any regression (see "Natural next steps" below).
 
-**One asymmetry worth knowing going in:** Codex's `account/usage/read`,
-called *with* a `threadId`, reports real
+**Correction (2026-08-30):** an earlier pass through this file claimed
+Codex's local session rollout files don't store token counts at all, and
+concluded any token/cost detail had to come from a per-thread RPC call.
+That was wrong — verified empirically the same day. Codex's local
+session rollout files (`~/.codex/sessions/**/*.jsonl`) **do** carry an
+`event_msg` entry of `type: "token_count"` after essentially every turn
+in a session with actual activity: `info.total_token_usage` /
+`.last_token_usage` (input/cached/cache_write/output/reasoning/total
+tokens, cumulative and per-turn) *plus* a `rate_limits` snapshot
+(`primary`/`secondary` `used_percent`, `resets_at`) at that same instant
+— i.e. a local, durable, Codex analogue of what `recompute_token_events.py`
+scans for Claude. Confirmed across 45 local session files: 19 with actual
+turns all had `token_count` events (1,344 total, back to 2026-08-27); the
+other 26 are just empty stubs (opened, zero turns) — nothing missing
+there, correctly. `recompute_codex_events.py` scans these directly — no
+RPC / API call needed, same "only log what has no other durable source"
+principle as the Claude side.
+
+**One asymmetry that's still real, though:** Codex's `account/usage/read`,
+called *with* a `threadId`, separately reports real
 `estimatedUsageUsdMicros`/`estimatedUsageCreditsMicros` per thread —
-actual dollar-equivalent spend, not an inferred model. Claude's API never
-populates its analogous `*_dollars` fields (see "Payload surface" in the
-notebook) — this project had to *infer* a dollar-cost weighting by
-regression instead. Codex may let this project validate that hypothesis
-directly rather than infer it, once a `recompute_codex_events.py`
-analogue exists to enumerate thread ids and pull their usage. Also note:
-Codex's local session rollout files (`~/.codex/sessions/**/*.jsonl`) do
-**not** store token counts at all (confirmed empirically), unlike Claude
-Code's transcripts — so there's no local-file equivalent of
-`recompute_token_events.py` for Codex; any token/cost detail has to come
-from that per-thread RPC call, not from parsing local files.
+actual dollar-equivalent spend, not an inferred model. The local
+`token_count` events give token *counts*, not dollars, same limitation
+Claude's transcripts have. Claude's API never populates its analogous
+`*_dollars` fields (see "Payload surface" in the notebook) — this
+project had to *infer* a dollar-cost weighting by regression instead.
+Codex may let this project validate that hypothesis directly rather than
+infer it — but only via that per-thread RPC call, a genuine Codex API
+call unlike the free local-file scan above, so don't reach for it until
+the token-count-only regression (buildable right now, see Natural next
+steps) has actually been tried and found wanting.
 
 Anthropic's `GET https://api.anthropic.com/api/oauth/usage` (the endpoint
 behind `/status` and this machine's statusline) returns only a pre-computed
@@ -67,9 +84,27 @@ pricing.
 ## Repo ↔ deploy layout (standard convention, see `~/dev/CLAUDE.md` / `~/.claude/CLAUDE.md`)
 
 - `~/dev/agent-quota-tracker/` — this git repo, source of truth for code. **Never edit the deployed copy directly.**
-- `~/opt/agent-quota-tracker/` — deployed runtime copy: `poll_claude.py`, `poll_codex.py`, `poll_all.py`, `recompute_token_events.py`, the LaunchAgent plist, and `data/` (the actual logs — gitignored, lives only here). Edit code in `~/dev`, then re-run `./install.sh` to redeploy.
+- `~/opt/agent-quota-tracker/` — deployed runtime copy: `poll_claude.py`, `poll_codex.py`, `poll_all.py`, `recompute_token_events.py`, `recompute_codex_events.py`, the LaunchAgent plist, and `data/` (the actual logs — gitignored, lives only here). Edit code in `~/dev`, then re-run `./install.sh` to redeploy.
 - `~/Library/LaunchAgents/com.jeanlescut.agent-quota-tracker.plist` — symlink only, points into `~/opt/.../`. Never a real file there.
-- LaunchAgent runs `poll_all.py` every 5 minutes (`StartInterval=300`), which runs `poll_claude.py` then `poll_codex.py` as subprocesses.
+- LaunchAgent ticks `poll_all.py` every 60s (`StartInterval=60`, changed from 300 on 2026-08-30), which runs `poll_claude.py` then `poll_codex.py` as subprocesses — but a tick isn't necessarily a poll. Both pollers self-throttle most ticks away, settling to roughly the old flat 5-minute cadence while idle (see each script's own module docstring); `poll_claude.py` additionally speeds back up to every tick while agent-statusline (a separate project) reports a live Claude Code statusline, via a heartbeat file it touches on every render. This exists because agent-statusline used to poll the same Anthropic endpoint itself on a 60s cache TTL, and running that opportunistically across every open session independently caused 429s during busy multi-session hours — agent-statusline now reads this project's log instead (see its own `AGENTS.md`'s "Cross-project dependency").
+
+## Cross-project dependency
+
+agent-statusline (a separate repo/project, `~/dev/agent-statusline`) reads
+this project's `data/utilization-log.jsonl` for the Claude quota it shows in
+the statusline, instead of polling Anthropic's usage endpoint itself (see
+its own `AGENTS.md`'s "Cross-project dependency" section) — this project is
+the single fixed-cadence poller for that endpoint on this machine now; a
+second independent poller caused 429s during busy multi-session hours.
+
+The coupling goes the other way too: `poll_claude.py` reads
+`~/opt/agent-statusline/state/providers/claude.heartbeat`'s mtime to know
+whether a Claude Code statusline is rendering somewhere right now, and polls
+faster while it is (see `poll_claude.py`'s module docstring). Both
+directions are soft dependencies — if the other project isn't installed,
+each side just falls back to its older, flatter behavior (agent-statusline
+shows stale/no quota data; this project's Claude poller never detects
+"live" and settles to its flat idle cadence).
 
 ## Naming history (in case anything still references an old name)
 
@@ -91,13 +126,20 @@ no-op once its source folder is gone, so there's no cost to keeping them.
 This is the single most important design decision in this repo — don't
 "simplify" it back to one incremental logger without re-reading this.
 
-- **`poll_claude.py`** — runs on the LaunchAgent timer (via `poll_all.py`,
-  see below). Does exactly one thing: append the full raw `/api/oauth/usage`
-  response + selected HTTP headers to `data/utilization-log.jsonl`, tagged
-  `source: "claude"`. This **must** be polled: the endpoint has no
-  history, so a missed 5-minute tick is a permanently lost reading.
-- **`poll_codex.py`** — same rationale, same file, `source: "codex"`.
-  Spawns `codex app-server --stdio` and speaks JSON-RPC (`initialize`,
+- **`poll_claude.py`** — runs on the LaunchAgent tick (via `poll_all.py`,
+  see below), but self-throttles most ticks away (see its module docstring):
+  it polls every tick while agent-statusline's heartbeat file says a Claude
+  Code statusline is live, settling to roughly every 5 minutes once idle.
+  When it does poll, it does exactly one thing: append the full raw
+  `/api/oauth/usage` response + selected HTTP headers to
+  `data/utilization-log.jsonl`, tagged `source: "claude"`. This **must** be
+  polled: the endpoint has no history, so a missed reading is permanently
+  lost - the self-throttling only skips ticks it judges unnecessary, it
+  never disables polling outright.
+- **`poll_codex.py`** — same rationale, same file, `source: "codex"`. Also
+  self-throttles to roughly every 5 minutes (no live-session speedup wired
+  up on the Codex side - see its module docstring for why). Spawns `codex
+  app-server --stdio` and speaks JSON-RPC (`initialize`,
   `account/rateLimits/read`, `account/usage/read`) instead of a plain
   HTTP GET, since that's the only interface Codex exposes for this.
   Logs the raw `account/*` results under `codex_rate_limits`/`codex_usage`
@@ -110,9 +152,16 @@ This is the single most important design decision in this repo — don't
   `data/token-events.jsonl` from scratch every time, by scanning every
   `*.jsonl` under `~/.claude/projects/`. Stateless — no byte offsets, no
   incremental state, just overwrite-on-demand via a `.tmp` + atomic
-  `.replace()`. Claude-only: Codex's local session files don't store
-  token counts, so there's no equivalent scan possible there yet (see
-  "Natural next steps" for the per-thread-RPC alternative).
+  `.replace()`.
+- **`recompute_codex_events.py`** — the Codex analogue, same rationale
+  and same stateless-rebuild shape. Scans every `*.jsonl` under
+  `~/.codex/sessions/` for `event_msg` entries of `type: "token_count"`
+  and writes one record per event to `data/codex-token-events.jsonl`.
+  Pure local-file parsing, **no RPC / Codex API call** — those events
+  already carry both the token-usage breakdown and a `rate_limits`
+  snapshot (see the correction note in "What this project is" above for
+  why an earlier version of this file wrongly said this data didn't
+  exist locally).
 
 **Standing rule for this project: only log data that has no other durable
 source.** Token usage is *not* logged on a timer, on purpose, because it's
@@ -136,6 +185,7 @@ Full JSON schema examples are in `README.md`. Quick summary:
 
 - `data/utilization-log.jsonl` — one record per poll tick, shared by both pollers. Claude rows: `{ts, iso, source: "claude", api, api_headers, error}`. Codex rows (since 2026-08-30): `{ts, iso, source: "codex", codex_rate_limits, codex_usage, error}`. Rows written before 2026-08-30 have no `source` key at all — treat missing as `"claude"`. Rows written before 2026-08-26 have an even older schema (`token_deltas`/`baseline` fields, no `api_headers`) — handle all shapes if reading full history.
 - `data/token-events.jsonl` — one record per assistant message with usage, full fidelity (model, effort, session/cwd/sidechain identity, verbatim `usage` object including the `cache_creation` 5m/1h split and `output_tokens_details.thinking_tokens`). Deliberately excludes message content. Claude-only (see "Architecture" above).
+- `data/codex-token-events.jsonl` — Codex analogue, one record per local `token_count` event (roughly one per turn), full fidelity (session id/cwd, `total_token_usage`/`last_token_usage`, and the `rate_limits` snapshot logged alongside it). Built by `recompute_codex_events.py` from local session files only — no API call (see "Architecture" above).
 
 As of 2026-08-27: 440 utilization poll rows (390 with a usable payload —
 ~11% were failed fetches, now with a recorded reason — see the `error`
@@ -424,23 +474,26 @@ dead), so it's off this list:
    weekly window's promo dies ~12h after it opens) or only at the next
    weekly reset (09-07) — that tells you how Anthropic implements a
    limit change mid-cycle, which is useful beyond just this promo.
-1. **Build `recompute_codex_events.py`.** `poll_codex.py` landed
-   2026-08-30 and gives the rate-limit trajectory, but not yet a
-   token/cost breakdown — that needs `account/usage/read` called *per
-   thread id* (enumerable from `~/.codex/sessions/`), not a local-file
-   scan (Codex transcripts don't carry token counts — see "What this
-   project is" above). This is what would let the notebook's new "Codex"
-   section do more than confirm the poller works.
-2. **Validate the dollar-cost hypothesis directly on Codex**, once #1
-   exists: `account/usage/read`'s per-thread
-   `estimatedUsageUsdMicros`/`estimatedUsageCreditsMicros` is a real
-   reported dollar figure, not an inferred one. Compare it against
-   `usedPercent` movement the same way the Claude section regresses
-   `dollar_cost` against `five_hour_pct` — except here you can check
-   whether the reported $ *directly* predicts the meter, without needing
-   a pricing table or a regression at all. If it does, that's strong
-   independent confirmation of the whole dollar-cost framework this
-   project is built on.
+1. ✅ **`recompute_codex_events.py`** — prototyped 2026-08-30. Scans
+   `~/.codex/sessions/**/*.jsonl` for `token_count` events (see
+   "Architecture" above) — no RPC/API call, same free local-file
+   approach as `recompute_token_events.py`. This is what lets the
+   notebook's "Codex" section regress token usage against the polled
+   `usedPercent` the same way the Claude section does. Next: actually
+   wire its output into `analysis.ipynb` and run that regression.
+2. **Validate the dollar-cost hypothesis directly on Codex**, using the
+   *real* per-thread RPC this time (`account/usage/read` called with a
+   `threadId`, enumerable from `~/.codex/sessions/`) — this is a genuine
+   Codex API call, unlike #1, so only reach for it if the token-count
+   regression from #1 leaves something unresolved that a real reported
+   dollar figure would settle. `estimatedUsageUsdMicros`/
+   `estimatedUsageCreditsMicros` per thread is real, not inferred — compare
+   it against `usedPercent` movement the same way the Claude section
+   regresses `dollar_cost` against `five_hour_pct`, except here you can
+   check whether the reported $ *directly* predicts the meter, without
+   needing a pricing table or a regression at all. If it does, that's
+   strong independent confirmation of the whole dollar-cost framework
+   this project is built on.
 3. Deliberately run real Opus-5 volume in a window that closes, to get a
    tested (not assumed) Opus-vs-Sonnet cost ratio against the official
    2.5× pricing ratio — still no window has enough Opus volume for this.

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Deploys the quota pollers to ~/opt/agent-quota-tracker and schedules them
-# via a single launchd LaunchAgent (every 5 minutes, running poll_all.py -
-# see its docstring for why one job runs two subprocesses instead of two
-# jobs). Idempotent - safe to re-run any time, including on a fresh
+# via a single launchd LaunchAgent (every 60s, running poll_all.py - see its
+# docstring for why one job runs two subprocesses instead of two jobs).
+# Each poller's own docstring covers why a 60s tick isn't a 60s poll rate:
+# both self-throttle to roughly every 5 minutes while idle, and poll_claude.py
+# additionally speeds back up to every tick while agent-statusline reports a
+# live session. Idempotent - safe to re-run any time, including on a fresh
 # machine. Self-migrating - detects any prior layout (oldest:
 # ~/opt/utilization-tracker, com.jeanlescut.utilization-tracker;
 # 2026-08-26: ~/opt/claude-utilization-tracker,
@@ -69,6 +72,12 @@ rm -f "$FOLDER_PROD/poll.py"  # stale pre-2026-08-30 name, before the poll_claud
 cp "$SRC/recompute_token_events.py" "$FOLDER_PROD/recompute_token_events.py"
 chmod +x "$FOLDER_PROD/recompute_token_events.py"
 
+# Same rationale, Codex side: rebuilds data/codex-token-events.jsonl from
+# the token_count events already durable in ~/.codex/sessions/ - no API
+# call needed (see AGENTS.md's "What this project is" correction note).
+cp "$SRC/recompute_codex_events.py" "$FOLDER_PROD/recompute_codex_events.py"
+chmod +x "$FOLDER_PROD/recompute_codex_events.py"
+
 echo "(Over-)writing $REAL_PLIST..."
 tee "$REAL_PLIST" >/dev/null <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -84,14 +93,18 @@ tee "$REAL_PLIST" >/dev/null <<EOF
         <string>$FOLDER_PROD/poll_all.py</string>
     </array>
 
-    <!-- Run every 5 minutes -->
+    <!-- Tick every 60s - NOT the same as polling every 60s. Both pollers
+         self-throttle most of these ticks away (see each one's module
+         docstring): poll_claude.py polls every tick while agent-statusline
+         reports a live session, settling to ~5 min once idle; poll_codex.py
+         has no live-session signal wired up and always settles to ~5 min. -->
     <key>StartInterval</key>
-    <integer>300</integer>
+    <integer>60</integer>
 
     <!-- Take a reading immediately when the job is loaded, i.e. at login and
          every time this script re-bootstraps it - otherwise the first reading
-         after a reboot is up to 5 minutes late, and ./install.sh gives no
-         immediate signal that polling actually works.
+         after a reboot is late, and ./install.sh gives no immediate signal
+         that polling actually works.
          Note this does NOT address sleep gaps: StartInterval doesn't fire
          while the Mac is asleep, though launchd does fire once on wake. Those
          gaps are mostly benign (no local usage happens while asleep either). -->
@@ -117,6 +130,7 @@ launchctl bootout "gui/$(id -u)" "$LINK_PLIST" 2>/dev/null || true
 echo "Bootstrap..."
 launchctl bootstrap "gui/$(id -u)" "$LINK_PLIST"
 
-echo "Deployed $REAL_PLIST (symlinked from $LINK_PLIST), polling every 5 min."
+echo "Deployed $REAL_PLIST (symlinked from $LINK_PLIST), ticking every 60s"
+echo "(Claude polls speed up to ~60s while a statusline is live, both settle to ~5 min otherwise)."
 echo "Log: $FOLDER_PROD/data/utilization-log.jsonl"
 echo "Check status: launchctl print gui/$(id -u)/$LABEL"

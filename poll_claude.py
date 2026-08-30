@@ -13,6 +13,22 @@ analysis time from the transcripts Claude Code itself already writes under
 would just be storing a copy of data that already durably exists elsewhere
 on disk (cleanupPeriodDays=365 on this machine, so "durably" means about a
 year). Only log what can't be recomputed after the fact.
+
+The LaunchAgent ticks this every 60s (see install.sh), but every tick isn't
+necessarily a real poll: agent-statusline (a separate project - see its
+AGENTS.md's "Cross-project dependency") touches a heartbeat file on every
+statusline render, so a heartbeat younger than ACTIVE_WINDOW_SECONDS means a
+statusline is being drawn somewhere *right now*. If so, poll for real -
+that's the whole point of a 60s tick. If not, only poll if the last logged
+reading (of either outcome, success or error) is already
+IDLE_INTERVAL_SECONDS old, so a fully idle machine still settles to roughly
+the old flat 5-minute cadence instead of a 60s busy-loop for no reason. This
+deliberately does NOT key off token/message activity - a usage window
+resetting to 0% moves the meter with zero new tokens spent, so "is anyone
+even looking at a statusline" is the right signal, not "did tokens move."
+A missing heartbeat file (statusline not installed, or never rendered) just
+means is_active() is always False, which degrades gracefully to the old
+flat 5-minute cadence.
 """
 import json
 import subprocess
@@ -27,6 +43,11 @@ UTIL_LOG_FILE = DATA_DIR / "utilization-log.jsonl"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 
+# See the module docstring for the gating rationale.
+HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "providers" / "claude.heartbeat"
+ACTIVE_WINDOW_SECONDS = 90
+IDLE_INTERVAL_SECONDS = 300
+
 # Response headers worth keeping - request-id lets a specific reading be
 # cross-referenced/reported to Anthropic support if a number ever looks
 # wrong; date is the server's own clock, useful to sanity-check local
@@ -39,9 +60,11 @@ HEADERS_TO_KEEP = (
 
 
 def fetch_token() -> tuple[str | None, dict | None]:
-    """Same macOS Keychain read statusline-usage-fetch.sh uses - Claude
-    Code itself writes the OAuth token here on login, under this exact
-    service name. Returns (token, d_error); exactly one is non-None."""
+    """Claude Code itself writes the OAuth token here on login, under this
+    exact service name - this is now the only place on the machine reading
+    it for quota purposes; agent-statusline reads this project's log instead
+    of the Keychain directly (see the module docstring). Returns
+    (token, d_error); exactly one is non-None."""
     try:
         d_raw = subprocess.run(
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
@@ -93,8 +116,52 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
                             "detail": exc.msg}
 
 
+def _is_active(now: float) -> bool:
+    """Is a Claude Code statusline rendering somewhere right now?"""
+    try:
+        return (now - HEARTBEAT_FILE.stat().st_mtime) < ACTIVE_WINDOW_SECONDS
+    except OSError:
+        return False
+
+
+def _last_log_ts() -> int | None:
+    """Timestamp of the last logged row (any source, any outcome), read from
+    the tail of the file rather than a full scan - this runs every tick,
+    forever, and the log only grows."""
+    if not UTIL_LOG_FILE.exists():
+        return None
+    with UTIL_LOG_FILE.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        chunk = min(size, 16384)
+        f.seek(size - chunk)
+        data = f.read(chunk)
+    lines = [line for line in data.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        return json.loads(lines[-1]).get("ts")
+    except json.JSONDecodeError:
+        # A line this close to a 16KB chunk boundary being truncated, or a
+        # corrupt row, are both edge cases - fail open (treat as due) rather
+        # than risk silently going quiet.
+        return None
+
+
+def _should_poll(now: float) -> bool:
+    if _is_active(now):
+        return True
+    last_ts = _last_log_ts()
+    return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
+
+
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    now = time.time()
+    if not _should_poll(now):
+        print(f"skip: idle, last reading is under {IDLE_INTERVAL_SECONDS}s old")
+        return
 
     token, d_error = fetch_token()
     d_api = d_api_headers = None

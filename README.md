@@ -96,9 +96,21 @@ share a failure mode:
 ### `poll_claude.py` + `poll_codex.py` — the parts that run on a timer
 
 Deployed to `~/opt/agent-quota-tracker/`, scheduled via a single launchd
-LaunchAgent (`com.jeanlescut.agent-quota-tracker`, every 5 minutes — see
+LaunchAgent (`com.jeanlescut.agent-quota-tracker`, ticking every 60s — see
 `install.sh`) that runs `poll_all.py`, which in turn runs each poller as
 its own subprocess (so one crashing can't stop the other).
+
+A 60s tick isn't a 60s poll rate: both pollers self-throttle most ticks away
+(see each script's own module docstring), settling to roughly the old flat
+5-minute cadence while idle. `poll_claude.py` additionally speeds back up to
+every tick while a heartbeat file agent-statusline (a separate project on
+this machine) touches on every statusline render says a Claude Code session
+is live right now — that project used to poll this same endpoint itself,
+and running that independently of this poller is exactly what caused 429s
+during busy multi-session hours; it now reads this project's log instead
+(see `AGENTS.md`'s "Cross-project dependency" notes in both repos).
+`poll_codex.py` has no such live-session signal wired up and always settles
+to ~5 minutes.
 
 `poll_claude.py` fetches the full raw `/api/oauth/usage` response
 (unfiltered — every field, including ones currently `null` on this
@@ -111,8 +123,9 @@ statusline uses), so it spawns `codex app-server --stdio`, does the
 `data/utilization-log.jsonl`, disambiguated by a `source` field.
 
 This side **must** be polled: neither endpoint has history. A missed
-5-minute window is a permanently lost reading — there is no way to ask
-"what was my utilization at 3pm yesterday" after the fact.
+reading is a permanently lost one — there is no way to ask "what was my
+utilization at 3pm yesterday" after the fact. The self-throttling only
+skips ticks it judges unnecessary; it never disables polling outright.
 
 ### `recompute_token_events.py` — not scheduled, run by hand
 

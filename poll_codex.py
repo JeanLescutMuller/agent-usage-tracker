@@ -21,6 +21,17 @@ is deliberately NOT fetched here - it needs an enumerable list of thread
 ids and isn't part of "the current rate-limit snapshot", the same
 "unrecoverable" bar poll_claude.py applies. That's future work for a
 recompute_codex_events.py analogue, not this poller.
+
+The shared LaunchAgent tick dropped to 60s so poll_claude.py could poll
+faster while a Claude Code statusline is live (see its module docstring).
+Codex has no such live-session signal wired up (agent-statusline's Codex
+adapter never polls at all - it just relays whatever the live Codex session
+already handed it), so there's no faster case to unlock here.
+IDLE_INTERVAL_SECONDS below just keeps this poller at its original flat
+~5-minute cadence despite the faster tick, by skipping ticks until the last
+codex-sourced reading is that old. Deliberately no dependency on
+poll_claude.py or agent-statusline for this - unlike the Claude side, this
+gate never varies.
 """
 import json
 import shutil
@@ -30,6 +41,8 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 UTIL_LOG_FILE = DATA_DIR / "utilization-log.jsonl"
+
+IDLE_INTERVAL_SECONDS = 300
 
 # launchd runs jobs with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
 # doesn't include ~/.local/bin, where this user's `codex` symlink lives (see
@@ -123,8 +136,44 @@ def fetch_codex_state() -> tuple[dict | None, dict | None, dict | None]:
             proc.kill()
 
 
+def _last_codex_log_ts() -> int | None:
+    """Timestamp of the last codex-sourced row, read from the tail of the
+    file rather than a full scan - this runs every tick, forever, and the
+    log only grows."""
+    if not UTIL_LOG_FILE.exists():
+        return None
+    with UTIL_LOG_FILE.open("rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        chunk = min(size, 16384)
+        f.seek(size - chunk)
+        data = f.read(chunk)
+    for line in reversed(data.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            d_row = json.loads(line)
+        except json.JSONDecodeError:
+            # A line this close to a 16KB chunk boundary being truncated, or
+            # a corrupt row, are both edge cases - fail open (treat as due)
+            # rather than risk silently going quiet.
+            return None
+        if d_row.get("source") == "codex":
+            return d_row.get("ts")
+    return None
+
+
+def _should_poll(now: float) -> bool:
+    last_ts = _last_codex_log_ts()
+    return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
+
+
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if not _should_poll(time.time()):
+        print(f"skip: last codex reading is under {IDLE_INTERVAL_SECONDS}s old")
+        return
 
     d_rate_limits, d_usage, d_error = fetch_codex_state()
 
