@@ -102,15 +102,22 @@ its own subprocess (so one crashing can't stop the other).
 
 A 60s tick isn't a 60s poll rate: both pollers self-throttle most ticks away
 (see each script's own module docstring), settling to roughly the old flat
-5-minute cadence while idle. `poll_claude.py` additionally speeds back up to
-every tick while a heartbeat file agent-statusline (a separate project on
-this machine) touches on every statusline render says a Claude Code session
-is live right now — that project used to poll this same endpoint itself,
-and running that independently of this poller is exactly what caused 429s
-during busy multi-session hours; it now reads this project's log instead
-(see `AGENTS.md`'s "Cross-project dependency" notes in both repos).
-`poll_codex.py` has no such live-session signal wired up and always settles
-to ~5 minutes.
+5-minute cadence while idle — but in opposite directions while "live",
+because each side has a different local source of truth to lean on:
+
+| Agent | What counts as "live" | If live | Otherwise (idle) |
+|---|---|---|---|
+| **Claude** | A heartbeat file agent-statusline (a separate project on this machine) touches on every statusline **render** — updates just from having a session open on screen, whether or not you're actively prompting | Poll every tick (~60s) | Poll only if the last logged reading is ≥300s old (~5 min cadence) |
+| **Codex** | mtime of the session's own local `.jsonl` under `~/.codex/sessions/`, updated only when a turn actually **completes** and appends a `token_count` event — an open-but-idle session that isn't being prompted does *not* count as live | Skip the poll — the local file already has a fresher `rate_limits` snapshot for free (see `recompute_codex_events.py` below) | Poll only if the last logged `codex` reading is ≥300s old (~5 min cadence) |
+
+Claude speeds up when live because polling is its *only* source of truth —
+agent-statusline used to poll this same endpoint itself, and running that
+independently of this poller is exactly what caused 429s during busy
+multi-session hours; it now reads this project's log instead (see
+`AGENTS.md`'s "Cross-project dependency" notes in both repos). Codex does
+the opposite — it skips polling when live because an active session
+already writes its own `rate_limits` snapshot locally, so polling then
+would just be paying for a number the local file already has.
 
 `poll_claude.py` fetches the full raw `/api/oauth/usage` response
 (unfiltered — every field, including ones currently `null` on this
@@ -127,10 +134,9 @@ reading is a permanently lost one — there is no way to ask "what was my
 utilization at 3pm yesterday" after the fact. The self-throttling only
 skips ticks it judges unnecessary; it never disables polling outright.
 
-### `recompute_token_events.py` — not scheduled, run by hand
+### `recompute_token_events.py` / `recompute_codex_events.py` — not scheduled, run by hand
 
-Claude-only (Codex's local session files don't store token counts, so
-there's no equivalent scan possible there — see `AGENTS.md`). Rebuilds
+`recompute_token_events.py` is Claude-only. It rebuilds
 `data/token-events.jsonl` from scratch by scanning every
 `*.jsonl` transcript Claude Code itself writes under
 `~/.claude/projects/`. One record per individual assistant message that
@@ -154,6 +160,15 @@ is durable and a full rebuild only takes a couple of seconds even at
 that would just be logging something that doesn't need logging. Run it
 whenever you're about to analyze the data, so it reflects everything up
 to that moment.
+
+`recompute_codex_events.py` is the Codex analogue, same rationale and
+shape: it rebuilds `data/codex-token-events.jsonl` from scratch by
+scanning every `*.jsonl` rollout under `~/.codex/sessions/` for
+`token_count` events — one record per turn, carrying the full token-usage
+breakdown *and* the `rate_limits` snapshot logged alongside it. Pure
+local-file parsing, no API/RPC call — this is exactly the data
+`poll_codex.py` skips fetching itself while a session is live (see the
+table above).
 
 ## Setup
 

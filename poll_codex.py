@@ -24,14 +24,21 @@ recompute_codex_events.py analogue, not this poller.
 
 The shared LaunchAgent tick dropped to 60s so poll_claude.py could poll
 faster while a Claude Code statusline is live (see its module docstring).
-Codex has no such live-session signal wired up (agent-statusline's Codex
-adapter never polls at all - it just relays whatever the live Codex session
-already handed it), so there's no faster case to unlock here.
-IDLE_INTERVAL_SECONDS below just keeps this poller at its original flat
-~5-minute cadence despite the faster tick, by skipping ticks until the last
-codex-sourced reading is that old. Deliberately no dependency on
-poll_claude.py or agent-statusline for this - unlike the Claude side, this
-gate never varies.
+Codex is the mirror image, not the same trick: agent-statusline's Codex
+adapter never polls at all - it just relays whatever the live Codex CLI
+session hands it directly - and, separately, an active Codex session
+already writes its own rate_limits snapshot to
+~/.codex/sessions/**/*.jsonl on every turn (the `token_count` event; see
+recompute_codex_events.py and AGENTS.md's 2026-08-30 correction). So while
+a session is actively being written, an RPC poll here would just be paying
+for a number the local file already has for free, fresher than our 5-min
+cadence could ever be. IDLE_INTERVAL_SECONDS below does double duty:
+_codex_session_recently_active() skips this tick entirely if some session
+file was modified more recently than that, and _should_poll() also uses it
+as the flat idle cadence once no session is active - both numbers happen to
+be the same interval, not a coincidence, just "how fresh is fresh enough".
+Deliberately no dependency on poll_claude.py or agent-statusline for
+either check - this reads Codex's own local files directly.
 """
 import json
 import shutil
@@ -41,6 +48,7 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 UTIL_LOG_FILE = DATA_DIR / "utilization-log.jsonl"
+SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 IDLE_INTERVAL_SECONDS = 300
 
@@ -163,16 +171,44 @@ def _last_codex_log_ts() -> int | None:
     return None
 
 
-def _should_poll(now: float) -> bool:
-    last_ts = _last_codex_log_ts()
-    return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
+def _codex_session_recently_active(now: float) -> bool:
+    """True if some Codex session rollout file was modified within the
+    last IDLE_INTERVAL_SECONDS - meaning a live session already has a
+    fresher rate_limits snapshot on disk than polling would get us (see
+    module docstring). Only scans today's and yesterday's local-date
+    directories (~/.codex/sessions/YYYY/MM/DD/, bucketed by *local* time -
+    confirmed empirically, do NOT swap in time.gmtime() here or this reads
+    the wrong folder near a UTC/local day-boundary mismatch), not the
+    whole tree - that tree only grows forever and this runs every tick.
+    Yesterday's directory still matters because a session that started
+    just before local midnight keeps appending to its original file, which
+    stays filed under yesterday's date even as its mtime ticks past
+    midnight."""
+    for days_back in (0, 1):
+        lt = time.localtime(now - days_back * 86400)
+        day_dir = SESSIONS_DIR / f"{lt.tm_year:04d}" / f"{lt.tm_mon:02d}" / f"{lt.tm_mday:02d}"
+        if not day_dir.is_dir():
+            continue
+        for path in day_dir.glob("*.jsonl"):
+            try:
+                if now - path.stat().st_mtime < IDLE_INTERVAL_SECONDS:
+                    return True
+            except OSError:
+                continue  # file removed/rotated mid-check - not "active"
+    return False
 
 
 def main() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not _should_poll(time.time()):
-        print(f"skip: last codex reading is under {IDLE_INTERVAL_SECONDS}s old")
+    now = time.time()
+    if _codex_session_recently_active(now):
+        print(f"skip: a Codex session file was modified under {IDLE_INTERVAL_SECONDS}s ago "
+              f"- local rate_limits snapshot is already fresher than a poll would be")
+        return
+    last_ts = _last_codex_log_ts()
+    if last_ts is not None and (now - last_ts) < IDLE_INTERVAL_SECONDS:
+        print(f"skip: idle, last codex reading is under {IDLE_INTERVAL_SECONDS}s old")
         return
 
     d_rate_limits, d_usage, d_error = fetch_codex_state()

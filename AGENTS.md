@@ -87,6 +87,7 @@ pricing.
 - `~/opt/agent-quota-tracker/` — deployed runtime copy: `poll_claude.py`, `poll_codex.py`, `poll_all.py`, `recompute_token_events.py`, `recompute_codex_events.py`, the LaunchAgent plist, and `data/` (the actual logs — gitignored, lives only here). Edit code in `~/dev`, then re-run `./install.sh` to redeploy.
 - `~/Library/LaunchAgents/com.jeanlescut.agent-quota-tracker.plist` — symlink only, points into `~/opt/.../`. Never a real file there.
 - LaunchAgent ticks `poll_all.py` every 60s (`StartInterval=60`, changed from 300 on 2026-08-30), which runs `poll_claude.py` then `poll_codex.py` as subprocesses — but a tick isn't necessarily a poll. Both pollers self-throttle most ticks away, settling to roughly the old flat 5-minute cadence while idle (see each script's own module docstring); `poll_claude.py` additionally speeds back up to every tick while agent-statusline (a separate project) reports a live Claude Code statusline, via a heartbeat file it touches on every render. This exists because agent-statusline used to poll the same Anthropic endpoint itself on a 60s cache TTL, and running that opportunistically across every open session independently caused 429s during busy multi-session hours — agent-statusline now reads this project's log instead (see its own `AGENTS.md`'s "Cross-project dependency").
+- `poll_codex.py` self-throttles the *opposite* direction (added 2026-08-30): it **skips** a tick outright if any `~/.codex/sessions/**/*.jsonl` file was modified in the last 5 minutes, because an active Codex session already writes its own `rate_limits` snapshot to that file on every turn (the `token_count` event — see "Correction" above and `recompute_codex_events.py`), fresher than a poll would get anyway. Once no session file is that fresh, it falls back to the same flat ~5-minute cadence the Claude side uses while idle. Don't confuse the two directions: Claude speeds up when active because polling is the *only* source of truth there; Codex skips when active because polling would be redundant with a free local source. One consequence worth knowing before you go looking for a bug: `data/utilization-log.jsonl`'s `source: "codex"` rows will show gaps during exactly the periods of heaviest Codex use — that's by design, not lost coverage; the trajectory for those periods lives in `data/codex-token-events.jsonl` instead (not yet merged into `analysis.ipynb` — see Natural next steps).
 
 ## Cross-project dependency
 
@@ -137,13 +138,17 @@ This is the single most important design decision in this repo — don't
   lost - the self-throttling only skips ticks it judges unnecessary, it
   never disables polling outright.
 - **`poll_codex.py`** — same rationale, same file, `source: "codex"`. Also
-  self-throttles to roughly every 5 minutes (no live-session speedup wired
-  up on the Codex side - see its module docstring for why). Spawns `codex
-  app-server --stdio` and speaks JSON-RPC (`initialize`,
-  `account/rateLimits/read`, `account/usage/read`) instead of a plain
-  HTTP GET, since that's the only interface Codex exposes for this.
-  Logs the raw `account/*` results under `codex_rate_limits`/`codex_usage`
-  keys, alongside the same `error` convention as `poll_claude.py`.
+  settles to roughly every 5 minutes idle, but the self-throttle direction
+  is inverted from the Claude side: it **skips** a tick if any local
+  `~/.codex/sessions/**/*.jsonl` file was modified in the last 5 minutes,
+  since an active session already writes a fresher `rate_limits` snapshot
+  there itself (see "Repo ↔ deploy layout" above and its own module
+  docstring). Spawns `codex app-server --stdio` and speaks JSON-RPC
+  (`initialize`, `account/rateLimits/read`, `account/usage/read`) instead
+  of a plain HTTP GET, since that's the only interface Codex exposes for
+  this. Logs the raw `account/*` results under
+  `codex_rate_limits`/`codex_usage` keys, alongside the same `error`
+  convention as `poll_claude.py`.
 - **`poll_all.py`** — the actual LaunchAgent target. Runs the two pollers
   above as subprocesses (not imports), so one crashing can't stop the
   other. Each poller stays fully runnable standalone by hand.
@@ -204,6 +209,13 @@ must skip those.
   `time.mktime` silently interprets its input as *local* time and produces
   wrong epoch values. This was a real bug, caught and fixed before
   deployment.
+- **`~/.codex/sessions/YYYY/MM/DD/` is bucketed by *local* time, not
+  UTC** — the inverse gotcha from the one above. Confirmed empirically: a
+  file named `...T16-33-14...` contains a `session_meta.timestamp` of
+  `...T14:33:14Z`, a 2h Zurich/UTC (CEST) offset. `poll_codex.py`'s
+  `_codex_session_recently_active()` uses `time.localtime()` for exactly
+  this reason — swapping in `time.gmtime()` would check the wrong day
+  directory near a UTC/local midnight mismatch.
 - **`detect_windows()` in `analysis.ipynb`**: `resets_at` is a fixed
   boundary set when a window opens, not a rolling "+5h from now" — cluster
   consecutive readings that report the *same* `resets_at` (5-minute
