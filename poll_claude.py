@@ -91,6 +91,18 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
         headers={
             "Authorization": f"Bearer {token}",
             "anthropic-beta": "oauth-2025-04-20",
+            # Everything below matches what the real `claude` binary's own
+            # fetchUtilization() sends to this same endpoint (recovered by
+            # decompiling ~/.local/share/claude/versions/*, 2026-08-30) -
+            # urllib's bare defaults (Python-urllib/x.y UA, no Accept, no
+            # anthropic-version) fingerprint this as a raw script hitting an
+            # internal OAuth-only endpoint, unlike anything the real client
+            # ever sends. Untested hypothesis: worth an honest data point,
+            # not a confirmed fix - see data/utilization-log.jsonl going
+            # forward.
+            "anthropic-version": "2023-06-01",
+            "Accept": "application/json",
+            "User-Agent": "claude-cli/2.1.251 (external, cli)",
         },
     )
     try:
@@ -104,8 +116,21 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
     # side. Those need completely different responses, and until now the log
     # recorded all three identically as `"api": null`.
     except urllib.error.HTTPError as exc:
-        return None, None, {"stage": "http", "type": "HTTPError",
-                            "status": exc.code, "detail": exc.reason}
+        d_err = {"stage": "http", "type": "HTTPError",
+                 "status": exc.code, "detail": exc.reason}
+        # 2026-08-30: mitmproxy capture showed the server DOES send a real
+        # Retry-After on 429 (e.g. 1820s) - this poller was silently
+        # discarding it (HEADERS_TO_KEEP never covered it, and only the
+        # success path even looked at headers) and retrying every 60-300s
+        # regardless, almost certainly re-tripping the exact backoff window
+        # the server asked for. _should_poll() now enforces this.
+        retry_after = exc.headers.get("Retry-After") if exc.headers else None
+        if retry_after is not None:
+            try:
+                d_err["retry_after_s"] = int(retry_after)
+            except ValueError:
+                pass
+        return None, None, d_err
     except urllib.error.URLError as exc:
         # No HTTP status at all - offline, DNS, TLS, or the 5s timeout.
         return None, None, {"stage": "network", "type": type(exc).__name__,
@@ -124,12 +149,11 @@ def _is_active(now: float) -> bool:
         return False
 
 
-def _last_log_ts() -> int | None:
-    """Timestamp of the last logged row (any source, any outcome), read from
-    the tail of the file rather than a full scan - this runs every tick,
-    forever, and the log only grows."""
+def _tail_rows() -> list[dict]:
+    """Parsed rows from the tail of the log, newest last - shared by both
+    lookups below so there's one place doing the truncation-tolerant read."""
     if not UTIL_LOG_FILE.exists():
-        return None
+        return []
     with UTIL_LOG_FILE.open("rb") as f:
         f.seek(0, 2)
         size = f.tell()
@@ -137,21 +161,56 @@ def _last_log_ts() -> int | None:
         f.seek(size - chunk)
         data = f.read(chunk)
     lines = [line for line in data.splitlines() if line.strip()]
-    if not lines:
-        return None
-    try:
-        return json.loads(lines[-1]).get("ts")
-    except json.JSONDecodeError:
-        # A line this close to a 16KB chunk boundary being truncated, or a
-        # corrupt row, are both edge cases - fail open (treat as due) rather
-        # than risk silently going quiet.
-        return None
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            # A line this close to the 16KB chunk boundary being truncated,
+            # or a corrupt row - skip it rather than risk raising here, this
+            # runs every tick forever.
+            continue
+    return rows
+
+
+def _last_log_row() -> dict | None:
+    """The last logged row (any source, any outcome) - used only for the
+    idle-cadence fallback below, which deliberately doesn't care which
+    poller (Claude or Codex) was last active on this machine."""
+    rows = _tail_rows()
+    return rows[-1] if rows else None
+
+
+def _last_claude_log_row() -> dict | None:
+    """The last logged row from THIS poller specifically. poll_all.py
+    interleaves Claude and Codex rows in the same file (see its docstring),
+    so scanning back past intervening Codex rows is required here - reading
+    the literal last line missed a real Retry-After backoff for a full tick
+    once already (2026-08-30: a Codex row landed as the tail seconds before
+    this ran, its `error` was silently treated as "no backoff active", and
+    the poller polled straight into a live 429 lockout it should have been
+    sitting out - the whole point of the backoff check below)."""
+    for row in reversed(_tail_rows()):
+        if row.get("source", "claude") == "claude":
+            return row
+    return None
 
 
 def _should_poll(now: float) -> bool:
+    last_claude_row = _last_claude_log_row()
+    if last_claude_row is not None:
+        d_err = last_claude_row.get("error") or {}
+        retry_after_s = d_err.get("retry_after_s")
+        if retry_after_s is not None:
+            backoff_until = last_claude_row["ts"] + retry_after_s
+            if now < backoff_until:
+                # Server-mandated backoff always wins, active session or not -
+                # see the note on the retry_after_s capture above.
+                return False
     if _is_active(now):
         return True
-    last_ts = _last_log_ts()
+    last_row = _last_log_row()
+    last_ts = last_row["ts"] if last_row else None
     return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
 
 

@@ -271,6 +271,20 @@ must skip those.
   5-hour budget range early in this project's history ($19–$82 vs.
   $57.54–$73.07 once the split was captured).
 
+- **`_should_poll()`'s backoff check must scan back to the last row from
+  THIS poller specifically, not just the last row in the file.**
+  `poll_all.py` interleaves `source:"claude"` and `source:"codex"` rows in
+  the same `data/utilization-log.jsonl`. A helper that reads only the
+  literal last line (as `_last_log_row()` originally did) will happily read
+  a Codex success row and conclude "no active backoff" seconds after
+  Claude got a 429 with a live `Retry-After`. Caught 2026-08-30: a Codex
+  row landed as the tail moments before a scheduled Claude tick, the tick
+  silently ignored a live ~30-min backoff, and polled straight into it.
+  Fixed by `_last_claude_log_row()`, which scans backward from the tail
+  filtering on `source`. Any future per-poller state check on this shared
+  log needs the same filter — don't reuse `_last_log_row()`
+  (any-source) for anything Claude-specific.
+
 ## What "cache" means (if you need to re-explain it to the user)
 
 Two roles a chunk of input can play under Anthropic's prompt caching:
@@ -458,6 +472,377 @@ where a later pass superseded one):**
     `seven_day_omelette`, `tangelo`, `iguana_necktie`, `cinder_cove`,
     `amber_ladder`, `omelette_promotional` — don't assume what they
     represent without more evidence.
+
+## `GET /api/oauth/usage` 429s — full investigation (2026-08-30)
+
+**TL;DR: `Retry-After` was real and this poller was ignoring it, which is
+now fixed — but that's not the whole story. The account has independently
+been stuck rate-limited on this one specific endpoint for 3+ days, and
+Claude Code's own `/usage` display doesn't actually depend on this
+endpoint working at all — it gets the same numbers from a completely
+different, more resilient path. Both halves matter; don't read this as
+"the 429s are fixed now."**
+
+### 1. Production log: the 429 rate, and how it escalated
+
+`data/utilization-log.jsonl`, 2026-08-24→08-30, ~1030 rows: **21% overall
+429 rate** on `GET /api/oauth/usage`, but not flat — it climbed with no
+corresponding change in polling cadence:
+
+| day | 200 | 429 | 429% |
+|---|---|---|---|
+| 08-24 | 88 | 0 | 0.0% |
+| 08-25 | 171 | 0 | 0.0% |
+| 08-26 | 105 | 4 | 3.7% |
+| 08-27 | 139 | 21 | 13.1% |
+| 08-28 | 181 | 49 | 21.2% |
+| 08-29 | 35 | 89 | **71.8%** |
+| 08-30 (partial) | 83 | 57 | 39.9% |
+
+A day-over-day climb with a *constant* poller cadence rules out "our
+request rate is too high" as the sole cause — something external
+(account-wide contention, or a degrading server-side state) was compounding
+independently of this project's own behavior.
+
+### 2. Two hypotheses tested and ruled out — keep this list so nobody
+retests them from scratch
+
+- **Request headers / User-Agent fingerprinting.** Decompiled
+  `~/.local/share/claude/versions/<ver>` (a Bun-bundled single binary —
+  `grep -a`/byte-offset extraction of the embedded JS works fine, see
+  method below) to find the real client's exact headers for this
+  endpoint (`fetchUtilization()`, minified name `uI`, wrapped in `Hr()`
+  which turned out to be a *telemetry* wrapper, not a cache — see below
+  for the actual cache). Added matching headers
+  (`anthropic-version`, `Accept`, a real `User-Agent`) to
+  `fetch_usage()`. Result: **no change** — 5/5 requests still 429'd
+  immediately after deploying. Later, a live mitmproxy capture of the
+  *real* `claude` binary's own request to this same endpoint showed it
+  getting **429 too**, with its own genuine headers (see §4). Headers were
+  never the differentiator — conclusively ruled out, not just
+  unconfirmed.
+- **HTTP/1.1 vs HTTP/2 (ALPN/TLS fingerprint).** Python's `urllib`/
+  `http.client` never sends an ALPN extension, so this poller is
+  structurally HTTP/1.1-only; `curl --http2` showed the server *accepts*
+  h2. Looked promising until a real packet capture (`tcpdump` +
+  `tshark`, no decryption needed for this part — ALPN is sent in
+  cleartext in the TLS ClientHello) of this Mac's actual outbound traffic
+  showed **every real connection from this machine to
+  `api.anthropic.com`, including from the genuine interactive `claude`
+  CLI, offers `http/1.1` only — never `h2`.** The server supporting HTTP/2
+  says nothing about whether any real client here asks for it. Ruled out.
+
+### 3. The real, verified root cause: a real `Retry-After` was being thrown away
+
+A `mitmproxy` capture of our own poller's request (proxied via
+`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`/`SSL_CERT_FILE` for CA trust — see
+§5 for why `SSLKEYLOGFILE` doesn't work here) showed the actual 429
+response:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 1820
+Server: cloudflare
+{"error":{"type":"rate_limit_error","message":"Rate limited. Please try again later."}}
+```
+
+A real, honest, counting-down `Retry-After` (confirmed by re-requesting
+seconds later: 1820 → 1767, exactly matching elapsed time) — **not** the
+broken `retry-after: 0` some public bug reports describe for this
+endpoint (e.g. `anthropics/claude-code#30930`). `poll_claude.py` never
+looked at this header at all (`HEADERS_TO_KEEP` didn't include it, and the
+error path didn't inspect headers), so it kept retrying every 60–300s
+*inside* a window the server explicitly asked it to sit out — the most
+likely driver of the escalating rate in §1, though we can't retroactively
+prove it since historical `Retry-After` values were never logged.
+
+**Fixed 2026-08-30:** `fetch_usage()` now captures `retry_after_s` from
+the 429 response; `_should_poll()` treats `now < last_ts + retry_after_s`
+as a hard skip that overrides even the "statusline is active, poll every
+60s" fast path (see the `_last_claude_log_row()` gotcha above — the first
+version of this fix had a real bug where a Codex row could mask it).
+Verified live: immediately after deploying, with the heartbeat file fresh
+(statusline actively rendering — the condition that would otherwise force
+a poll), the poller correctly skipped instead of polling into a live
+backoff.
+
+**This fix is good citizenship, not a guaranteed cure.** See §4 — the
+lockout isn't scoped to this poller alone.
+
+### 4. The account has been in a persistent lockout, independent of this poller
+
+`~/.claude.json`'s `cachedUsageUtilization.fetchedAtMs` (Claude Code's own
+persisted last-known-good reading from this exact endpoint, account-UUID
+scoped) was found frozen at **2026-08-27T16:43:52Z** — 74.6 hours stale
+at the time of writing, and the app's own read logic
+(`wen = 3600000` ms = 1 hour validity, in the decompiled binary) would
+already reject it as too old. As best we can tell, **no successful call
+to `GET /api/oauth/usage` landed from any process on this machine for
+3+ days** — this was never just our poller's problem.
+
+Confirmed directly: routed a **genuine interactive `claude` session**
+(fresh terminal, `HTTPS_PROXY=http://127.0.0.1:8080` +
+`NODE_EXTRA_CA_CERTS`/`SSL_CERT_FILE` pointed at a local `mitmproxy`
+CA) through the same capture, typed `/usage`, and captured its exact
+real request:
+
+```
+GET /api/oauth/usage
+Accept: application/json, text/plain, */*
+User-Agent: claude-cli/2.1.251 (external, cli)
+Authorization: Bearer ...
+anthropic-beta: oauth-2025-04-20
+
+<< 429 Too Many Requests
+   Retry-After: 304
+```
+
+The official client, with its own real headers, at that exact moment,
+also got 429. This is decisive: whatever is happening is account/token
+scoped, not this-poller scoped. Plausible contributor (not proven): this
+machine had 5-6 concurrent interactive `claude` sessions open the whole
+time, each independently capable of re-touching this endpoint (its own
+internal quota/grace-window bookkeeping) and re-tripping any recovery
+window before it could complete — with several uncoordinated callers
+sharing one account-wide bucket, no single well-behaved poller can
+guarantee the window ever gets a clean gap to expire in.
+
+### 5. The actual discovery: `/usage` doesn't need this endpoint at all
+
+This is the part worth remembering longest. Despite the account-wide
+lockout in §4, `/usage` kept showing plausible, live-updating numbers the
+entire time. Decompiling further (class `_5e` in the same binary,
+`probeQuotaStatus()`/`extractQuotaStatusFromHeaders()`/`WYe()`) found why:
+Claude Code has a **second, independent, unrelated path** to the same
+quota numbers, and it's the one actually driving the display:
+
+- Every `POST /v1/messages` response — i.e. every real message sent, in
+  any session — carries the current quota as **response headers**:
+  `anthropic-ratelimit-unified-5h-utilization`,
+  `anthropic-ratelimit-unified-5h-reset`,
+  `anthropic-ratelimit-unified-7d-utilization`,
+  `anthropic-ratelimit-unified-7d-reset`, `anthropic-ratelimit-unified-status`,
+  plus grace-window variants (`-grace-5h-utilization` etc.).
+- Claude Code also fires a dedicated, minimal probe purely to harvest these
+  headers, decoupled entirely from `GET /api/oauth/usage`: a real
+  `messages.create()` call with `max_tokens:1`,
+  `messages:[{role:"user",content:"quota"}]`, `source:"quota_check"`. See
+  §7 below for exactly when this fires — it is **not** triggered by typing
+  `/usage` (a real gap in an earlier pass through this section, caught and
+  corrected the same day — `/usage`'s own code path never calls it, see §6).
+- Verified with real captured data, not inferred: a throwaway `-p "reply
+  with just the word ok"` test call returned
+  `anthropic-ratelimit-unified-5h-utilization: 0.72` and
+  `anthropic-ratelimit-unified-7d-utilization: 0.72` — an exact match to
+  what `/usage` was showing on screen (`Current session 72%`, `Current
+  week 72%`) at that moment.
+
+**Implication:** `/v1/messages` was never rate-limited in any of this
+investigation's testing (every call succeeded, 200 OK, throughout) —
+only the standalone metadata `GET /api/oauth/usage` is. Claude Code just
+quietly prefers whichever path is actually working. If this project ever
+needs a *reliable* quota reading rather than "whatever the dedicated
+endpoint feels like giving us," riding these headers on a real (or
+otherwise-necessary) Messages API call is a strictly better-attested
+signal than polling `/api/oauth/usage` — at the real cost of that being a
+billed API call, not a free metadata GET. Not implemented — flagged as a
+natural next step if `/api/oauth/usage`'s reliability doesn't improve.
+
+**Where (if anywhere) each source ends up on disk — traced precisely,
+not guessed, since this determines whether any of it is passively
+readable without proxying live traffic:**
+
+- **The headers themselves: nowhere. Confirmed by direct code trace, not
+  inference.** `WL()` — the getter the display layer calls — reads only
+  the live in-memory `_5e` state (`rawUtilization`, populated by
+  `extractQuotaStatusFromHeaders()` on every response). No call chain
+  from there reaches disk. Restart the process and this state is gone;
+  the next real `/v1/messages` call repopulates it within seconds, which
+  is normally instant enough that nobody notices the gap.
+- **`~/.claude.json` → `cachedUsageUtilization` is written from exactly
+  one place**, and it's not the headers path:
+  ```js
+  async function ort(e, o) {
+    let t = await uI(o);        // GET /api/oauth/usage
+    ...
+    if (u) a4n(t, d, e);        // persists to disk, ONLY on a successful
+    return {status: "ok", utilization: t};   // dedicated-endpoint fetch
+  }
+  ```
+  This is why that file has been frozen at 2026-08-27T16:43:52Z (§4) —
+  its one and only writer is the endpoint that's been failing for days.
+- **The actual fallback chain `/usage`'s display resolves through**,
+  found in the same module (`I2e(e)`):
+  ```js
+  function I2e(e) {
+    let o = WL();                       // 1. live in-memory headers, if any
+    if (!o.five_hour && !o.seven_day) {
+      let t = l4n(e);                   // 2. else: stale persisted disk cache
+      return t ? {utilization: t.utilization, source: "persisted", fetchedAtMs: t.fetchedAtMs} : null;
+    }
+    return {utilization: {five_hour: ..., seven_day: ...}, source: "headers"};
+  }
+  ```
+  Live headers win whenever anything is in memory; the stale disk
+  snapshot is a last resort for a freshly-started process that hasn't
+  sent a message yet. Note the tagged `source` field (`"headers"` vs
+  `"persisted"`) — if that's ever surfaced in a UI or telemetry payload
+  somewhere, it would be a free, authoritative way to tell which path
+  actually served a given reading, worth grepping for later.
+- **Net effect on the two passive sources checked so far:** neither is a
+  substitute for regular logging. `~/.claude.json` is a single
+  overwritten snapshot, not a history, and only updates on a working
+  dedicated-endpoint call. The transcript `.jsonl` files only capture a
+  `quotaLimits` snapshot on an outright *rejected* turn (confirmed: 1 such
+  row out of hundreds in a sampled real transcript; zero in this
+  project's own 1,061-row session, which had no rejections) — sparse and
+  rejection-triggered only. **§6 below found a third source that
+  *is* a good substitute** — this pair of bullets is about the first two
+  only, don't read it as the final word on all passive sources.
+
+### 6. The statusline traced precisely — and it's a better source than
+polling, for free
+
+Section 5 established that `/usage` isn't fully dependent on
+`GET /api/oauth/usage`. This section traces the **statusline's**
+`rate_limits` stdin field (`~/dev/agent-statusline`'s own consumer of it)
+to its exact origin, because it turns out to matter a lot for this
+project's design (see §8).
+
+Found the literal serialization site (same binary, the statusline JSON
+payload builder):
+
+```js
+let kt = WL(), Ht = {
+  ...kt.five_hour && {five_hour: {used_percentage: kt.five_hour.utilization*100, resets_at: kt.five_hour.resets_at}},
+  ...kt.seven_day && {seven_day: {used_percentage: kt.seven_day.utilization*100, resets_at: kt.seven_day.resets_at}},
+  ...
+};
+// ...(Ht.five_hour||Ht.seven_day||Ht.spend_limit)&&{rate_limits:Ht}...  -- omitted from the payload entirely if empty
+```
+
+`WL()` is **the same in-memory `_5e` getter** traced in §5 — nothing new,
+just confirmed this is its only source. Consequences, all now certain
+rather than inferred:
+
+- **The statusline makes zero network calls of its own, ever.** The
+  `refreshInterval: 10` setting only controls how often Claude Code
+  re-invokes *our* script — it re-serializes whatever's already in
+  `_5e`'s memory each time, it does not fetch anything new to do so. (This
+  closes out a real worry raised mid-investigation — that the statusline
+  itself might be silently hammering `/api/oauth/usage` every ~10s across
+  every open session, which would have been a much bigger and scarier
+  finding than anything in §3/§4. It does not do that.)
+- **It is not "frozen."** It updates the instant this *process's own*
+  `_5e` state updates — i.e. on every real `/v1/messages` response this
+  specific session receives. A session that hasn't sent a message yet has
+  empty `_5e` state, and the whole `rate_limits` key is simply **absent**
+  from the JSON payload (matches the schema doc-comment found alongside
+  this: `"rate_limits": {  // Optional... after first API response, while
+  at least one window is present"`) — not present-but-zero.
+- **Confirmed the field names and shape by an independent public tool
+  too, not just our own code:** `ohugonnot/claude-code-statusline` parses
+  the identical stdin fields
+  (`.rate_limits.five_hour/.seven_day.used_percentage/.resets_at`) as its
+  *primary* source, falling back to `GET /api/oauth/usage` (same URL,
+  same two headers we use) only when stdin lacks them. Its README/source
+  independently corroborates everything above.
+- **This project's own `agent-statusline` script already parses this
+  field and then throws it away.** `claude-statusline-command.sh` reads
+  `.rate_limits.five_hour.used_percentage` etc. from stdin into
+  `$five_pct`/`$week_pct` — then unconditionally overwrites both with
+  whatever `agent-quota-tracker`'s poller last cached, every render after
+  the very first one. The free, zero-cost, near-continuous signal is
+  sitting in a variable that gets discarded. See §8 for the proposed fix.
+
+### 7. Exactly when Claude Code fires its own quota-check probe
+(`probeQuotaStatus`/`_en` from §5) — traced, not `/usage`
+
+A real gap in the first pass through §5: it implied the `max_tokens:1`
+`content:"quota"` probe fires "when `/usage` is checked." **False —
+traced precisely, and `/usage`'s own resolution path (`ort()`, §5) never
+calls it.** `ort()` only tries the dedicated GET endpoint, then falls back
+to reading whatever `_5e`/`WL()` *already* holds — it never triggers a
+new probe on demand. Found the probe's three actual call sites by tracing
+every caller of the exported `probeQuotaStatus` wrapper:
+
+1. **Once at session startup, cooldown-gated.** Part of a batch of
+   "background startup prefetches" (`n("Starting background startup
+   prefetches...")`, alongside a few other unrelated prefetches) — gated
+   by a `startupPrefetchedAt` timestamp plus a "nap" cooldown feature flag
+   (`tengu_cicada_nap_ms`), so it does not refire on every launch, only
+   when the cooldown has elapsed.
+2. **Scheduled around a rate-limited window's own reset time.** Found
+   wired into state named `wallResetsAt`/`nextAvailableAt`/
+   `continuableWallResetsAt` — fires a fresh probe timed to when a
+   previously-rejected window is expected to reopen, so the app learns
+   it's unblocked without waiting for the user to send a message and find
+   out the hard way.
+3. **A pre-flight check before confirming a model switch** — the call
+   site sits inside a `confirmingMainModel` flow, gets a fresh reading
+   before letting that action proceed.
+
+None of these are continuous polling, and none are keyed to the `/usage`
+command. Between these three bounded triggers and ordinary chat traffic,
+`_5e`'s in-memory state usually stays warm enough that `/usage` rarely
+needs to fall back past it (§5/§6) — which is why it looked seamless
+throughout the §4 lockout despite never itself causing a new probe.
+
+### 8. What this means for this project's own design — see `PLAN.md`
+
+§§1-7 above are the complete factual record. The resulting proposal for
+what `agent-quota-tracker`/`agent-statusline` should actually do about
+all of it — which process captures what, when, and why — is kept as a
+**separate, short, pending-validation document**:
+[`PLAN.md`](./PLAN.md) (same directory as this file). Read this section
+first if you're picking this up cold; `PLAN.md` assumes you already have
+it.
+
+### Methodology notes, for whoever repeats any of this
+
+- **Decompiling the `claude` binary:** it's a Bun-compiled single
+  executable (`~/.local/share/claude/versions/<ver>`) with the bundled JS
+  source still present as readable strings — `grep -a -o
+  ".\{N\}pattern.\{N\}"` or a small Python byte-offset extractor
+  (`data.find(b"...")`, slice, strip non-printable bytes) both work.
+  Minified identifiers (`Hr`, `dh`, etc.) collide across unrelated chunks
+  constantly — confirm a match by its call signature/usage, not just the
+  name; `grep -c` a name before trusting a single hit.
+- **`SSLKEYLOGFILE` does not work for capturing this app's traffic.**
+  Confirmed empirically: `claude doctor` makes real network calls with
+  zero keylog output. Most likely it uses macOS's native
+  Network.framework/Secure Transport rather than a keylog-capable
+  OpenSSL/BoringSSL build. Don't retry this path.
+- **`mitmproxy` (`brew install mitmproxy` — cask, gives `mitmdump`) does
+  work**, and is the only capture method that produced real results here.
+  Recipe: `mitmdump -p 8080 -w flows.mitm` in the background, then for
+  any client:
+  `HTTPS_PROXY=http://127.0.0.1:8080 HTTP_PROXY=http://127.0.0.1:8080
+  NODE_EXTRA_CA_CERTS=~/.mitmproxy/mitmproxy-ca-cert.pem
+  SSL_CERT_FILE=~/.mitmproxy/mitmproxy-ca-cert.pem <command>` (the app
+  does honor `getProxyFetchOptions`-style proxy env vars, and does trust
+  the CA via one of those two env vars — confirmed working for both the
+  Python poller and the real `claude` binary). Must be set **before** the
+  process starts — an already-running session can't pick up a new proxy
+  retroactively. Read back with `mitmdump -nr flows.mitm --set
+  flow_detail=4 "~u <url substring>"`.
+- **Driving the interactive TUI via `expect` to auto-type `/usage` did
+  not work reliably** (multiple attempts produced zero `/api/oauth/usage`
+  calls, likely a timing/paste-mode issue with the TUI's input handling).
+  Getting a human to type `/usage` in a proxied, freshly-launched
+  `claude` session was the only reliable way to capture that specific
+  interaction. `claude -p "<prompt>"` (headless/print mode) is easy to
+  script but **never calls `/api/oauth/usage` at all** — useful for
+  triggering a `/v1/messages` call (as in §5) but not for reproducing the
+  `/usage` command itself.
+- **`tcpdump -w file.pcap` prints nothing to the terminal by design** —
+  don't mistake silence for zero captured packets; check the file (`ls
+  -la`, or `tshark -r file.pcap`) instead. Also: `tcpdump -i en0 "host
+  X"` resolves `X` once at startup and only matches that literal
+  IP — fine as long as the target doesn't rotate IPs mid-capture, but
+  worth double-checking `route -n get <host>` for the right interface and
+  `dig +short <host> A/AAAA` for what it actually resolves to before
+  assuming a filter is wrong.
 
 ## How to continue the investigation
 
