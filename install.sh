@@ -1,136 +1,105 @@
-#!/usr/bin/env bash
-# Deploys the quota pollers to ~/opt/agent-quota-tracker and schedules them
-# via a single launchd LaunchAgent (every 60s, running poll_all.py - see its
-# docstring for why one job runs two subprocesses instead of two jobs).
-# Each poller's own docstring covers why a 60s tick isn't a 60s poll rate:
-# both self-throttle to roughly every 5 minutes while idle, and poll_claude.py
-# additionally speeds back up to every tick while agent-statusline reports a
-# live session. Idempotent - safe to re-run any time, including on a fresh
-# machine. Self-migrating - detects any prior layout (oldest:
-# ~/opt/utilization-tracker, com.jeanlescut.utilization-tracker;
-# 2026-08-26: ~/opt/claude-utilization-tracker,
-# com.jeanlescut.claude-utilization-tracker; later 2026-08-26:
-# ~/opt/claude-utilization-cost-tracker, com.jeanlescut.claude-utilization-cost-tracker
-# - renamed again 2026-08-27 to drop the Claude-specific name, since this
-# project now also tracks other coding agents' quotas, e.g. Codex, which
-# landed 2026-08-30 as poll_codex.py) and moves it to the current one,
-# carrying data/utilization-log.jsonl forward (the one file here that
-# can't be recomputed - see poll_claude.py's docstring).
+#!/bin/bash
+# Idempotent installer for agent-usage-tracker, for a machine with no prior
+# install. Carries no one-time migration logic on purpose: to move between
+# incompatible on-disk layouts, run uninstall.sh first - it removes
+# everything this script deploys, preserves data/ (irreplaceable usage
+# history), and flags anything left over as an orphan to check by hand -
+# then re-run this script.
 #
-# Usage: ./install.sh
-set -euo pipefail
+# Deploys, under ~/opt/agent-usage-tracker:
+# - bin/ingest-claude-statusline.sh, the entry point the Claude statusline
+#   (the separate agent-statusline project) pipes its stdin payload into;
+# - src/quota_polling/ and its 60s LaunchAgent;
+# - src/telemetry/otlp_receiver.py and its KeepAlive LaunchAgent, plus the
+#   telemetry keys in ~/.claude/settings.json's `env`.
+# Does NOT deploy adhoc_quotas_analysis/: run-by-hand research tooling stays
+# in ~/dev/agent-usage-tracker and runs from there (~/opt is for what a
+# scheduler runs unattended).
+#
+# Independent of agent-statusline: either can be installed first, or alone.
+# Without the statusline there are no push rows and the Claude poller stays
+# on its idle cadence (README.md's "Contract with agent-statusline").
+set -uo pipefail
 
-SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-FOLDER_PROD="$HOME/opt/agent-quota-tracker"
-LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-LABEL="com.jeanlescut.agent-quota-tracker"
-REAL_PLIST="$FOLDER_PROD/$LABEL.plist"
-LINK_PLIST="$LAUNCH_AGENTS/$LABEL.plist"
-
-# --- one-time migration off each prior name, oldest first ---
-migrate_legacy() {
-    local old_folder="$1" old_label="$2"
-    local old_link_plist="$LAUNCH_AGENTS/$old_label.plist"
-    if [ -d "$old_folder" ]; then
-        echo "Migrating $old_folder -> $FOLDER_PROD..."
-        launchctl bootout "gui/$(id -u)" "$old_link_plist" 2>/dev/null || true
-        rm -f "$old_link_plist"
-        mkdir -p "$FOLDER_PROD"
-        if [ -d "$old_folder/data" ]; then
-            mkdir -p "$FOLDER_PROD/data"
-            cp -n "$old_folder/data/"* "$FOLDER_PROD/data/" 2>/dev/null || true
-        fi
-        rm -rf "$old_folder"
-    fi
-}
-migrate_legacy "$HOME/opt/utilization-tracker" "com.jeanlescut.utilization-tracker"
-migrate_legacy "$HOME/opt/claude-utilization-tracker" "com.jeanlescut.claude-utilization-tracker"
-migrate_legacy "$HOME/opt/claude-utilization-cost-tracker" "com.jeanlescut.claude-utilization-cost-tracker"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/utils.sh"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "jq not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
 
-# Real files live in ~/opt/agent-quota-tracker/ (code + data +
-# the plist itself); ~/Library/LaunchAgents/ only ever holds a symlink into it
-# - see ~/dev/CLAUDE.md. Deliberately NOT wiping FOLDER_PROD before copying
-# (unlike auto-commit's deploy script) - data/utilization-log.jsonl is the
-# append-only log this tool exists to accumulate, and must survive a
-# re-install (it can't be recomputed - see poll_claude.py's docstring).
-mkdir -p "$FOLDER_PROD/data"
-mkdir -p "$LAUNCH_AGENTS"
+RUNTIME="$HOME/opt/agent-usage-tracker"
+LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 
-for f in poll_claude.py poll_codex.py poll_all.py; do
-    cp "$SRC/$f" "$FOLDER_PROD/$f"
-    chmod +x "$FOLDER_PROD/$f"
+echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN} agent-usage-tracker install${NC}"
+echo -e "${GREEN}========================================${NC}"
+
+_deploy() {
+    local src="$1" target="$2"
+    mkdir -p "$(dirname "$target")"
+    if [ -f "$target" ] && diff -q "$src" "$target" >/dev/null 2>&1; then
+        ok "$(basename "$target")"
+        return
+    fi
+    cp "$src" "$target"
+    chmod +x "$target" 2>/dev/null || true
+    installed "$(basename "$target")"
+}
+
+# Renders a LaunchAgent template into the runtime tree (the real file) and
+# symlinks it from ~/Library/LaunchAgents, then (re)loads it - always
+# restarting, so redeployed code takes effect.
+_launch_agent() {
+    local template="$1" label="$2" what="$3"
+    local real="$RUNTIME/$label.plist" link="$LAUNCH_AGENTS/$label.plist" tmp
+    mkdir -p "$LAUNCH_AGENTS"
+    tmp="$(mktemp)"
+    sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" "$template" > "$tmp"
+    if [ -f "$real" ] && diff -q "$tmp" "$real" >/dev/null 2>&1; then
+        rm -f "$tmp"
+        ok "$label"
+    else
+        mv "$tmp" "$real"
+        installed "$label ($what)"
+    fi
+    ln -sf "$real" "$link"
+    if [ -z "${AGENT_USAGE_TRACKER_SKIP_LAUNCHD:-}" ]; then
+        launchctl bootout "gui/$(id -u)" "$link" 2>/dev/null || true
+        launchctl bootstrap "gui/$(id -u)" "$link"
+    fi
+}
+
+step "runtime layout"
+# data/<agent>/account.jsonl + data/<agent>/<session-id>.jsonl - see
+# USAGE_DATA_REFERENCE.md §1.
+mkdir -p "$RUNTIME/data/claude" "$RUNTIME/data/codex" "$RUNTIME/state" "$RUNTIME/logs"
+ok "data/, state/, logs/"
+
+step "statusline ingest"
+_deploy "$SCRIPT_DIR/bin/ingest-claude-statusline.sh" "$RUNTIME/bin/ingest-claude-statusline.sh"
+
+step "quota polling"
+for f in "$SCRIPT_DIR"/src/quota_polling/*.py; do
+    _deploy "$f" "$RUNTIME/src/quota_polling/$(basename "$f")"
 done
-rm -f "$FOLDER_PROD/poll.py"  # stale pre-2026-08-30 name, before the poll_claude.py/poll_codex.py split
+_launch_agent "$SCRIPT_DIR/src/quota_polling/com.jeanlescut.agent-usage-tracker.plist.template" \
+    com.jeanlescut.agent-usage-tracker "ticks every 60s, every poller self-throttles"
 
-# Not scheduled - recompute_token_events.py is run by hand at analysis
-# time, rebuilding data/token-events.jsonl fresh from the transcripts
-# Claude Code already keeps under ~/.claude/projects/. Deployed here anyway
-# so it's available wherever the pollers' data/ actually lives.
-cp "$SRC/recompute_token_events.py" "$FOLDER_PROD/recompute_token_events.py"
-chmod +x "$FOLDER_PROD/recompute_token_events.py"
+step "telemetry receiver"
+# Only the receiver is deployed; merge_claude_env.py and its JSON run from
+# the repo.
+_deploy "$SCRIPT_DIR/src/telemetry/otlp_receiver.py" "$RUNTIME/src/telemetry/otlp_receiver.py"
+_launch_agent "$SCRIPT_DIR/src/telemetry/com.jeanlescut.agent-usage-tracker.otel.plist.template" \
+    com.jeanlescut.agent-usage-tracker.otel "listens on 127.0.0.1:4318"
 
-# Same rationale, Codex side: rebuilds data/codex-token-events.jsonl from
-# the token_count events already durable in ~/.codex/sessions/ - no API
-# call needed (see AGENTS.md's "What this project is" correction note).
-cp "$SRC/recompute_codex_events.py" "$FOLDER_PROD/recompute_codex_events.py"
-chmod +x "$FOLDER_PROD/recompute_codex_events.py"
+step "claude telemetry settings"
+# Only the keys in src/telemetry/claude_telemetry_env.json, inside `env`.
+# Takes effect for Claude sessions started after this.
+case "$("$PYTHON3" "$SCRIPT_DIR/src/telemetry/merge_claude_env.py" set)" in
+    changed) installed "telemetry env vars in ~/.claude/settings.json (new sessions only)" ;;
+    unchanged) ok "telemetry env vars in ~/.claude/settings.json" ;;
+    *) fail "telemetry env vars in ~/.claude/settings.json" ;;
+esac
 
-echo "(Over-)writing $REAL_PLIST..."
-tee "$REAL_PLIST" >/dev/null <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$LABEL</string>
-
-    <key>ProgramArguments</key>
-    <array>
-        <string>$PYTHON3</string>
-        <string>$FOLDER_PROD/poll_all.py</string>
-    </array>
-
-    <!-- Tick every 60s - NOT the same as polling every 60s. Both pollers
-         self-throttle most of these ticks away (see each one's module
-         docstring): poll_claude.py polls every tick while agent-statusline
-         reports a live session, settling to ~5 min once idle; poll_codex.py
-         has no live-session signal wired up and always settles to ~5 min. -->
-    <key>StartInterval</key>
-    <integer>60</integer>
-
-    <!-- Take a reading immediately when the job is loaded, i.e. at login and
-         every time this script re-bootstraps it - otherwise the first reading
-         after a reboot is late, and ./install.sh gives no immediate signal
-         that polling actually works.
-         Note this does NOT address sleep gaps: StartInterval doesn't fire
-         while the Mac is asleep, though launchd does fire once on wake. Those
-         gaps are mostly benign (no local usage happens while asleep either). -->
-    <key>RunAtLoad</key>
-    <true/>
-
-    <key>StandardOutPath</key>
-    <string>$FOLDER_PROD/poll.log</string>
-    <key>StandardErrorPath</key>
-    <string>$FOLDER_PROD/poll.err</string>
-
-    <key>ProcessType</key>
-    <string>Background</string>
-</dict>
-</plist>
-EOF
-
-ln -sf "$REAL_PLIST" "$LINK_PLIST"
-
-echo "Bootout..."
-launchctl bootout "gui/$(id -u)" "$LINK_PLIST" 2>/dev/null || true
-
-echo "Bootstrap..."
-launchctl bootstrap "gui/$(id -u)" "$LINK_PLIST"
-
-echo "Deployed $REAL_PLIST (symlinked from $LINK_PLIST), ticking every 60s"
-echo "(Claude polls speed up to ~60s while a statusline is live, both settle to ~5 min otherwise)."
-echo "Log: $FOLDER_PROD/data/utilization-log.jsonl"
-echo "Check status: launchctl print gui/$(id -u)/$LABEL"
+echo ""

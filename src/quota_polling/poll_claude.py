@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Samples Anthropic's utilization API on a timer, because that side has no
 history - a missed reading is permanently lost. Appends one record per run
-to data/utilization-log.jsonl: the full raw GET /api/oauth/usage response,
+to data/claude/account.jsonl: the full raw GET /api/oauth/usage response,
 unfiltered, plus its HTTP response headers - or, when the reading can't be
 taken, an `error` object saying which stage failed and why. A missing
 reading is itself data (roughly 11% of rows historically), and "the token
@@ -9,42 +9,68 @@ expired" and "the wifi dropped" need very different responses.
 
 Token usage is deliberately NOT logged here. It's fully recomputable at
 analysis time from the transcripts Claude Code itself already writes under
-~/.claude/projects/ (see recompute_token_events.py) - logging it here too
+~/.claude/projects/ (see ../../adhoc_quotas_analysis/analysis.ipynb's own recompute cell) - logging it here too
 would just be storing a copy of data that already durably exists elsewhere
 on disk (cleanupPeriodDays=365 on this machine, so "durably" means about a
 year). Only log what can't be recomputed after the fact.
 
 The LaunchAgent ticks this every 60s (see install.sh), but every tick isn't
-necessarily a real poll: agent-statusline (a separate project - see its
-AGENTS.md's "Cross-project dependency") touches a heartbeat file on every
-statusline render, so a heartbeat younger than ACTIVE_WINDOW_SECONDS means a
-statusline is being drawn somewhere *right now*. If so, poll for real -
-that's the whole point of a 60s tick. If not, only poll if the last logged
-reading (of either outcome, success or error) is already
-IDLE_INTERVAL_SECONDS old, so a fully idle machine still settles to roughly
-the old flat 5-minute cadence instead of a 60s busy-loop for no reason. This
-deliberately does NOT key off token/message activity - a usage window
-resetting to 0% moves the meter with zero new tokens spent, so "is anyone
-even looking at a statusline" is the right signal, not "did tokens move."
-A missing heartbeat file (statusline not installed, or never rendered) just
-means is_active() is always False, which degrades gracefully to the old
-flat 5-minute cadence.
+necessarily a real poll: the Claude statusline (the separate
+agent-statusline project) touches a heartbeat file under its own runtime
+tree on every render, and this reads that file's mtime - read-only, the one
+thing this project reads from agent-statusline (README.md's "Contract with
+agent-statusline"). A heartbeat
+younger than ACTIVE_WINDOW_SECONDS means a statusline is being drawn
+somewhere *right now*. If so, poll for real - that's the whole point of a
+60s tick. If not, only poll if the last logged reading (of either outcome,
+success or error) is already IDLE_INTERVAL_SECONDS old, so a fully idle
+machine still settles to roughly the old flat 5-minute cadence instead of a
+60s busy-loop for no reason. This deliberately does NOT key off
+token/message activity - a usage window resetting to 0% moves the meter with
+zero new tokens spent, so "is anyone even looking at a statusline" is the
+right signal, not "did tokens move." A missing heartbeat file (statusline
+not installed, or never rendered) just means the heartbeat check always
+reports not-fresh, which degrades gracefully to the old flat 5-minute cadence.
+
+Note this poller's own `source: "claude"` rows are a fallback path now, not
+the primary one: ../../bin/ingest-claude-statusline.sh pushes a free
+`source: "claude_statusline"` reading on every real message, riding
+Claude Code's own in-memory rate_limits state - no network call, never
+rate-limited. This poller still matters for the gap that push path can't
+cover: a session that hasn't sent its first message yet, or a stretch with
+no statusline rendering anywhere on the machine at all. Both sources share
+this same data/claude/account.jsonl file (Codex has its own,
+data/codex/account.jsonl - see poll_codex.py).
 """
 import json
 import subprocess
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
-UTIL_LOG_FILE = DATA_DIR / "utilization-log.jsonl"
+import _quota_common
+
+# src/quota_polling/ is deployed two levels under the runtime root
+# (~/opt/agent-usage-tracker/src/quota_polling/) - parent.parent.parent,
+# not parent.parent, or this would look for a nonexistent
+# src/data/ instead of the real sibling-of-src/ data/.
+DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+QUOTA_LOG_FILE = DATA_DIR / "claude" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
+
+# The "latest known quota" state file agent-statusline displays (README.md's
+# "Contract with agent-statusline"). Written here with source "P" via
+# _quota_common.write_state_if_newer, same format and same freshness rule
+# as ../../bin/ingest-claude-statusline.sh's "X" writes to this same file.
+STATE_FILE = Path.home() / "opt" / "agent-usage-tracker" / "state" / "quota" / "claude"
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 
-# See the module docstring for the gating rationale.
-HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "providers" / "claude.heartbeat"
+# See the module docstring for the gating rationale. Owned and written by
+# agent-statusline; only read here. Missing = no statusline, idle cadence.
+HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat" / "claude"
 ACTIVE_WINDOW_SECONDS = 90
 IDLE_INTERVAL_SECONDS = 300
 
@@ -62,8 +88,7 @@ HEADERS_TO_KEEP = (
 def fetch_token() -> tuple[str | None, dict | None]:
     """Claude Code itself writes the OAuth token here on login, under this
     exact service name - this is now the only place on the machine reading
-    it for quota purposes; agent-statusline reads this project's log instead
-    of the Keychain directly (see the module docstring). Returns
+    it for quota purposes (see the module docstring). Returns
     (token, d_error); exactly one is non-None."""
     try:
         d_raw = subprocess.run(
@@ -98,7 +123,7 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
             # anthropic-version) fingerprint this as a raw script hitting an
             # internal OAuth-only endpoint, unlike anything the real client
             # ever sends. Untested hypothesis: worth an honest data point,
-            # not a confirmed fix - see data/utilization-log.jsonl going
+            # not a confirmed fix - see data/claude-quota-history.jsonl going
             # forward.
             "anthropic-version": "2023-06-01",
             "Accept": "application/json",
@@ -139,58 +164,50 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
         # 200 OK but the body isn't JSON - e.g. a captive portal's login page.
         return None, None, {"stage": "parse", "type": "JSONDecodeError",
                             "detail": exc.msg}
+    except OSError as exc:
+        # Transport failures urllib doesn't wrap in URLError - e.g.
+        # http.client.RemoteDisconnected when the server closes the
+        # connection mid-request. Before this, they crashed the run and left
+        # no row at all (7 times by 2026-09-29, see logs/quota-poll.err).
+        return None, None, {"stage": "network", "type": type(exc).__name__,
+                            "detail": str(exc)}
 
 
-def _is_active(now: float) -> bool:
-    """Is a Claude Code statusline rendering somewhere right now?"""
+def _epoch(iso: str | None) -> str:
+    """Converts an ISO 8601 resets_at (fractional seconds and/or a bare
+    "Z" suffix, same formats the API sends) to an epoch-seconds string, or
+    "" if there's nothing to convert - mirrors the epoch filter the old
+    (now-removed) refresh-claude-quota.sh used to apply at read time."""
+    if not iso:
+        return ""
     try:
-        return (now - HEARTBEAT_FILE.stat().st_mtime) < ACTIVE_WINDOW_SECONDS
-    except OSError:
-        return False
-
-
-def _tail_rows() -> list[dict]:
-    """Parsed rows from the tail of the log, newest last - shared by both
-    lookups below so there's one place doing the truncation-tolerant read."""
-    if not UTIL_LOG_FILE.exists():
-        return []
-    with UTIL_LOG_FILE.open("rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        chunk = min(size, 16384)
-        f.seek(size - chunk)
-        data = f.read(chunk)
-    lines = [line for line in data.splitlines() if line.strip()]
-    rows = []
-    for line in lines:
-        try:
-            rows.append(json.loads(line))
-        except json.JSONDecodeError:
-            # A line this close to the 16KB chunk boundary being truncated,
-            # or a corrupt row - skip it rather than risk raising here, this
-            # runs every tick forever.
-            continue
-    return rows
+        return str(int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()))
+    except ValueError:
+        return ""
 
 
 def _last_log_row() -> dict | None:
     """The last logged row (any source, any outcome) - used only for the
     idle-cadence fallback below, which deliberately doesn't care which
     poller (Claude or Codex) was last active on this machine."""
-    rows = _tail_rows()
+    rows = _quota_common.tail_json_rows(QUOTA_LOG_FILE)
     return rows[-1] if rows else None
 
 
 def _last_claude_log_row() -> dict | None:
-    """The last logged row from THIS poller specifically. poll_all.py
-    interleaves Claude and Codex rows in the same file (see its docstring),
-    so scanning back past intervening Codex rows is required here - reading
-    the literal last line missed a real Retry-After backoff for a full tick
-    once already (2026-08-30: a Codex row landed as the tail seconds before
-    this ran, its `error` was silently treated as "no backoff active", and
-    the poller polled straight into a live 429 lockout it should have been
-    sitting out - the whole point of the backoff check below)."""
-    for row in reversed(_tail_rows()):
+    """The last logged row from THIS poller specifically, not from
+    ../../bin/ingest-claude-statusline.sh's frequent claude_statusline
+    pushes into the same data/claude/account.jsonl file - scanning back
+    past intervening push rows is required here, reading the literal last
+    line missed a real Retry-After backoff for a full tick once already
+    (2026-08-30, back when this file also interleaved Codex rows: a Codex
+    row landed as the tail seconds before this ran, its `error` was
+    silently treated as "no backoff active", and the poller polled straight
+    into a live 429 lockout it should have been sitting out - the whole
+    point of the backoff check below. The Codex interleaving is gone since
+    the 2026-08-31 per-provider file split, but the same discipline still
+    applies to claude_statusline rows within this file, so the filter stays)."""
+    for row in reversed(_quota_common.tail_json_rows(QUOTA_LOG_FILE)):
         if row.get("source", "claude") == "claude":
             return row
     return None
@@ -207,7 +224,7 @@ def _should_poll(now: float) -> bool:
                 # Server-mandated backoff always wins, active session or not -
                 # see the note on the retry_after_s capture above.
                 return False
-    if _is_active(now):
+    if _quota_common.is_fresh(HEARTBEAT_FILE, ACTIVE_WINDOW_SECONDS, now):
         return True
     last_row = _last_log_row()
     last_ts = last_row["ts"] if last_row else None
@@ -215,7 +232,7 @@ def _should_poll(now: float) -> bool:
 
 
 def main() -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    QUOTA_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     now = time.time()
     if not _should_poll(now):
@@ -235,8 +252,21 @@ def main() -> None:
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    with UTIL_LOG_FILE.open("a") as f:
+    with QUOTA_LOG_FILE.open("a") as f:
         f.write(json.dumps(d_record) + "\n")
+
+    if d_api is not None:
+        five_hour = d_api.get("five_hour") or {}
+        seven_day = d_api.get("seven_day") or {}
+        _quota_common.write_state_if_newer(
+            STATE_FILE,
+            round(five_hour.get("utilization") or 0),
+            _epoch(five_hour.get("resets_at")),
+            round(seven_day.get("utilization") or 0),
+            _epoch(seven_day.get("resets_at")),
+            "P",
+            d_record["ts"],
+        )
 
 
 if __name__ == "__main__":

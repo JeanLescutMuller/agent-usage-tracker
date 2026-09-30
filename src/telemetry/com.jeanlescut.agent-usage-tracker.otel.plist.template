@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jeanlescut.agent-usage-tracker.otel</string>
+
+    <!-- A long-running receiver, not a periodic job: Claude Code pushes
+         telemetry to it, so it must be listening whenever a Claude session
+         runs. See otlp_receiver.py's docstring. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON3__</string>
+        <string>__RUNTIME__/src/telemetry/otlp_receiver.py</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Restart it if it ever exits. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__RUNTIME__/logs/otel-receiver.log</string>
+    <key>StandardErrorPath</key>
+    <string>__RUNTIME__/logs/otel-receiver.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Minimal local OpenTelemetry receiver for Claude Code's usage events.
+
+Claude Code pushes its telemetry itself (nothing here polls anything): with
+the env vars install.sh merges into ~/.claude/settings.json, every Claude
+process - interactive or `claude -p` - POSTs batches of OTLP log records as
+JSON to http://127.0.0.1:4318/v1/logs every few seconds. This server accepts
+those batches and appends one row per usage event to that session's own
+session-scope file, data/claude/<session.id>.jsonl (USAGE_DATA_REFERENCE.md
+§1) - tagged `source: "claude_otel"`, with `observed_at` (epoch seconds of
+the event) as the join key. Events without a usable session id go to
+data/_unattributed/claude-otel.jsonl. See USAGE_DATA_SOURCES.md §3.7 for
+what the events carry and why: they are the only per-request record that
+includes the requests Claude Code never writes to its transcripts. They
+carry no quota percent, so they belong in session scope.
+
+Only usage events are kept (USAGE_EVENTS); prompt, tool and hook events are
+dropped on arrival. Each kept record is flattened losslessly: OTLP's typed
+{key, value: {stringValue|intValue|...}} attribute lists become plain JSON
+objects, and intValue (a string in OTLP/JSON) becomes an int.
+
+Stdlib only, bound to 127.0.0.1, run by its own KeepAlive LaunchAgent. If it
+is down, Claude Code drops the batches - it does not buffer them on disk.
+
+Usage: python3 otlp_receiver.py [--port 4318] [--data-dir <runtime data/>]
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+# Deployed at ~/opt/agent-usage-tracker/src/telemetry/ - three parents up is the
+# runtime root holding data/ (same layout as src/quota_polling/).
+RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
+DEFAULT_DATA_DIR = RUNTIME_DIR / "data"
+# Session ids become file names: plain UUID-like tokens only, never the
+# reserved account file.
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9-]{1,128}$")
+USAGE_EVENTS = {"api_request", "api_error", "api_refusal", "api_retries_exhausted"}
+MAX_BODY_BYTES = 16 * 1024 * 1024
+
+
+def flatten_value(d_value: dict):
+    """One OTLP AnyValue -> plain JSON value."""
+    if "stringValue" in d_value:
+        return d_value["stringValue"]
+    if "intValue" in d_value:
+        return int(d_value["intValue"])
+    if "doubleValue" in d_value:
+        return d_value["doubleValue"]
+    if "boolValue" in d_value:
+        return d_value["boolValue"]
+    if "arrayValue" in d_value:
+        return [flatten_value(v) for v in d_value["arrayValue"].get("values", [])]
+    if "kvlistValue" in d_value:
+        return flatten_attrs(d_value["kvlistValue"].get("values", []))
+    return None  # empty AnyValue
+
+
+def flatten_attrs(l_attrs: list) -> dict:
+    return {d["key"]: flatten_value(d.get("value", {})) for d in l_attrs}
+
+
+def usage_rows(d_payload: dict, received_at: int) -> list[dict]:
+    """ExportLogsServiceRequest -> one row per usage event record."""
+    l_rows = []
+    for d_rl in d_payload.get("resourceLogs", []):
+        d_resource = flatten_attrs(d_rl.get("resource", {}).get("attributes", []))
+        for d_sl in d_rl.get("scopeLogs", []):
+            for d_rec in d_sl.get("logRecords", []):
+                d_attrs = flatten_attrs(d_rec.get("attributes", []))
+                # event.name is the bare name ("api_request"); the body holds
+                # the prefixed one ("claude_code.api_request") - accept either.
+                event = d_attrs.get("event.name") or str(flatten_value(d_rec.get("body", {})) or "")
+                event = event.removeprefix("claude_code.")
+                if event not in USAGE_EVENTS:
+                    continue
+                time_unix_nano = int(d_rec.get("timeUnixNano") or 0)
+                l_rows.append({
+                    "source": "claude_otel",
+                    "observed_at": time_unix_nano // 10**9,
+                    "received_at": received_at,
+                    "event": event,
+                    "time_unix_nano": time_unix_nano,
+                    "attributes": d_attrs,
+                    "resource": d_resource,
+                })
+    return l_rows
+
+
+def target_file(data_dir: Path, d_row: dict) -> Path:
+    sid = str(d_row["attributes"].get("session.id") or "")
+    if SESSION_ID_RE.match(sid) and sid != "account":
+        return data_dir / "claude" / f"{sid}.jsonl"
+    return data_dir / "_unattributed" / "claude-otel.jsonl"
+
+
+def make_handler(data_dir: Path, lock: threading.Lock):
+    class Handler(BaseHTTPRequestHandler):
+        def _reply(self, code: int, body: bytes = b"{}"):
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY_BYTES:
+                return self._reply(413)
+            raw = self.rfile.read(length)
+            # Metrics and traces aren't enabled by install.sh; accept and
+            # discard them anyway so a misconfigured exporter doesn't retry.
+            if self.path != "/v1/logs":
+                return self._reply(200)
+            if "json" not in (self.headers.get("Content-Type") or ""):
+                return self._reply(415, b'{"error":"send OTLP as http/json"}')
+            try:
+                l_rows = usage_rows(json.loads(raw), int(time.time()))
+            except (ValueError, TypeError, AttributeError) as exc:
+                print(f"bad payload: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                return self._reply(400)
+            # One O_APPEND write() per row: the push path appends to the same
+            # session file from another process, and a single write() per
+            # line is what keeps the two from interleaving mid-line. The lock
+            # only serialises this receiver's own threads.
+            with lock:
+                for d_row in l_rows:
+                    path = target_file(data_dir, d_row)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+                    try:
+                        os.write(fd, (json.dumps(d_row) + "\n").encode())
+                    finally:
+                        os.close(fd)
+            self._reply(200)
+
+        def log_message(self, *args):
+            pass  # no per-request access log; errors still go to stderr
+
+    return Handler
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=int, default=4318)
+    parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    args = parser.parse_args()
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), make_handler(args.data_dir, threading.Lock()))
+    print(f"listening on 127.0.0.1:{args.port}, writing under {args.data_dir}", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

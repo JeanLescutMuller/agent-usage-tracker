@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-POLLERS = ("poll_claude.py", "poll_codex.py")
+POLLERS = ("poll_claude.py", "poll_codex.py", "poll_codex_plan_history.py")
 
 
 def main() -> None:

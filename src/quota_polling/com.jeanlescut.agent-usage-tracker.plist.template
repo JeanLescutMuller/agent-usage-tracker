@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jeanlescut.agent-usage-tracker</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PYTHON3__</string>
+        <string>__RUNTIME__/src/quota_polling/poll_all.py</string>
+    </array>
+
+    <!-- Tick every 60s - NOT the same as polling every 60s. Both pollers
+         self-throttle most of these ticks away (see each one's module
+         docstring): poll_claude.py polls every tick while a Claude Code
+         statusline is live, settling to ~5 min once idle; poll_codex.py
+         always settles to ~5 min. -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Take a reading immediately when the job is loaded, i.e. at login and
+         every time this script re-bootstraps it. Does NOT address sleep
+         gaps: StartInterval doesn't fire while the Mac is asleep, though
+         launchd does fire once on wake. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__RUNTIME__/logs/quota-poll.log</string>
+    <key>StandardErrorPath</key>
+    <string>__RUNTIME__/logs/quota-poll.err</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
