@@ -21,8 +21,10 @@ tree on every render, and this reads that file's mtime - read-only, the one
 thing this project reads from agent-statusline (README.md's "Contract with
 agent-statusline"). A heartbeat
 younger than ACTIVE_WINDOW_SECONDS means a statusline is being drawn
-somewhere *right now*. If so, poll for real - that's the whole point of a
-60s tick. If not, only poll if the last logged reading (of either outcome,
+somewhere *right now*. If so, poll for real, but at most every
+ACTIVE_INTERVAL_SECONDS (120s, two ticks): at one poll a minute the endpoint
+answered every other request with a 429 carrying Retry-After: 0, so the
+backoff check below never engaged (358 of 778 polls on 2026-10-03/04). If not, only poll if the last logged reading (of either outcome,
 success or error) is already IDLE_INTERVAL_SECONDS old, so a fully idle
 machine still settles to roughly the old flat 5-minute cadence instead of a
 60s busy-loop for no reason. This deliberately does NOT key off
@@ -73,7 +75,12 @@ KEYCHAIN_SERVICE = "Claude Code-credentials"
 # agent-statusline; only read here. Missing = no statusline, idle cadence.
 HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat" / "claude"
 ACTIVE_WINDOW_SECONDS = 90
+ACTIVE_INTERVAL_SECONDS = 120
 IDLE_INTERVAL_SECONDS = 300
+# launchd ticks are 60s apart but `ts` is stamped after the request returns,
+# so the second tick after a poll sees slightly under 120s; without this
+# slack every watched poll would slip to a third tick (180s).
+TICK_SLACK_SECONDS = 10
 
 # Response headers worth keeping - request-id lets a specific reading be
 # cross-referenced/reported to Anthropic support if a number ever looks
@@ -226,7 +233,10 @@ def _should_poll(now: float) -> bool:
                 # see the note on the retry_after_s capture above.
                 return False
     if _quota_common.is_fresh(HEARTBEAT_FILE, ACTIVE_WINDOW_SECONDS, now):
-        return True
+        # Watched: every ACTIVE_INTERVAL_SECONDS, timed from this poller's own
+        # last row (push rows don't count, they cost no API call).
+        return last_claude_row is None or \
+            (now - last_claude_row["ts"]) >= ACTIVE_INTERVAL_SECONDS - TICK_SLACK_SECONDS
     last_row = _last_log_row()
     last_ts = last_row["ts"] if last_row else None
     return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
@@ -237,7 +247,7 @@ def main() -> None:
 
     now = time.time()
     if not _should_poll(now):
-        print(f"skip: idle, last reading is under {IDLE_INTERVAL_SECONDS}s old")
+        print(f"skip: last reading is under {ACTIVE_INTERVAL_SECONDS}s old (watched) or {IDLE_INTERVAL_SECONDS}s old (idle)")
         return
 
     token, d_error = fetch_token()

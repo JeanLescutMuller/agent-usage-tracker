@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-04 (push dating and dedup, state-file source names); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
+*Last verified: 2026-10-04 (push dating and dedup, state-file source names, Claude poller cadence); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
 
 ---
 
@@ -71,7 +71,7 @@ Two kinds of file in total, easy to conflate:
 | Writer | Writes a history row when | Skips when |
 |---|---|---|
 | Claude push | The render's stdin has `rate_limits` **and** the transcript's last 256 KB contain an `assistant` entry to date it (`observed_at`). Deduplicated per session since 2026-10-04: an account row only when `(observed_at, percents, resets)` differs from this session's last one, a session row only when `(session_cost_usd, prompt_cache, model_id)` does. A new API response with unchanged percents still adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no `assistant` entry in that window: then **nothing** is written, state file included; a re-render of a reading this session already wrote |
-| Claude poller | Every tick while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. Errors are logged as rows too. | Mac asleep (launchd fires once on wake) |
+| Claude poller | Every 120 s (every second tick) while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. Errors are logged as rows too. | Mac asleep (launchd fires once on wake) |
 | Codex poller | Every tick while a Codex status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old | **Any Codex session file changed in the last 5 min** — the session file is then the fresher source (Sources §4.1); Mac asleep |
 | Telemetry receiver | Whenever a Claude session started after the install sends a batch (every few seconds while requests happen), interactive **and** `claude -p` | Receiver down (Claude Code drops the batch, no disk buffer); sessions started before the install |
 | Codex plan-history poller | 24 h after its last successful attempt, 1 h after a failed one. Errors are logged as rows. | Mac asleep; independent of the Codex poller's skip rules |
@@ -80,7 +80,7 @@ Coverage that follows from this:
 
 | Situation | Claude captured by | Codex captured by |
 |---|---|---|
-| Interactive session, messages flowing | Push, every render | Nothing in our log — the session file has it |
+| Interactive session, messages flowing | Push, each new reading | Nothing in our log — the session file has it |
 | Session open, no message sent yet | Push (stdin has `rate_limits` from startup, Sources §3.1) | Poller, every 60 s |
 | No status line anywhere | Poller, every 5 min | Poller, every 5 min |
 | Headless `claude -p` / `codex exec` | Per-request tokens and $ via telemetry; quota only through the next reading's meter movement | Only through the next reading's meter movement |
@@ -280,6 +280,7 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | **2026-09-30** | **Repo split**: usage tracking moves from `agent-statusline` into this repo, `agent-usage-tracker`. Runtime `~/opt/agent-statusline/{data,state/quota/claude,state/poll}` → `~/opt/agent-usage-tracker/…` (moved, not rewritten); LaunchAgents renamed `com.jeanlescut.agent-usage-tracker{,.otel}`. The push script becomes `bin/ingest-claude-statusline.sh` and takes the raw statusline payload on stdin instead of 9 arguments | None: row shapes, `source` values (`claude_statusline` included) and the scope rule are unchanged. Only paths moved |
 | 2026-09-30 | Push token fields `session_input_tokens` / `session_output_tokens` removed before ever being deployed | They were mislabelled: the source field is context size, not a session total (Sources §3.1) |
 | **2026-10-04** | **Push dated by the last `assistant` entry, deduplicated per session.** `observed_at` comes from the last API response in the transcript's last 256 KB instead of the last timestamped entry of any type in its last 20 lines; no such entry → nothing written, state file included (it used to get *now*). Rows are appended only when they differ from this session's previous one (§1). State-file `source` renamed `X` → `statusline`, `P` → `API` | Push row density drops by ~99% (one row per API response per session instead of one per ~10 s render: session `bc36b32e`'s 12,163 rows held 27 distinct readings). Older push rows keep their duplicates and may be dated late (§5.2); history is not rewritten |
+| 2026-10-04 | Claude poller polls every 120 s instead of every 60 s tick while a status line is on screen | At 60 s the endpoint refused every other request with a 429 and `Retry-After: 0` (358 of 778 polls on 2026-10-03/04), so poller error rows should drop sharply while the number of successful readings stays about the same |
 
 ---
 

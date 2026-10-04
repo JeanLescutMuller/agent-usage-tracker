@@ -32,4 +32,44 @@ section "existing failure classes keep their stage"
 assert_eq "URLError stays a network error" "network URLError" \
     "$(fetch_with 'urllib.error.URLError("offline")')"
 
+# should_poll <heartbeat age s or ""> <rows JSON lines> -> True/False at now=10000
+# Points QUOTA_LOG_FILE and HEARTBEAT_FILE at temp files; "" = no heartbeat.
+should_poll() {
+    local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/th-poll.XXXXXX")"
+    printf '%s\n' "$2" > "$dir/account.jsonl"
+    python3 -c "
+import os, sys
+from pathlib import Path
+sys.path.insert(0, '$QUOTA_POLLING_DIR')
+import poll_claude
+poll_claude.QUOTA_LOG_FILE = Path('$dir/account.jsonl')
+poll_claude.HEARTBEAT_FILE = Path('$dir/heartbeat')
+age = '$1'
+if age:
+    poll_claude.HEARTBEAT_FILE.touch()
+    os.utime(poll_claude.HEARTBEAT_FILE, (10000 - int(age), 10000 - int(age)))
+print(poll_claude._should_poll(10000))
+" 2>&1
+    rm -rf "$dir"
+}
+
+section "watched (fresh heartbeat) -> poll every 120s, not every 60s tick"
+assert_eq "last poll 60s ago -> skip (a minute apart drew a 429 every other time)" "False" \
+    "$(should_poll 5 '{"ts":9940,"source":"claude","error":null}')"
+assert_eq "last poll 119s ago (second tick, ts stamped after the request) -> poll" "True" \
+    "$(should_poll 5 '{"ts":9881,"source":"claude","error":null}')"
+assert_eq "push rows in between don't count as polls" "True" \
+    "$(should_poll 5 '{"ts":9870,"source":"claude","error":null}
+{"ts":9990,"source":"claude_statusline"}')"
+assert_eq "no poller row yet -> poll" "True" \
+    "$(should_poll 5 '{"ts":9990,"source":"claude_statusline"}')"
+assert_eq "Retry-After still wins while watched" "False" \
+    "$(should_poll 5 '{"ts":9700,"source":"claude","error":{"retry_after_s":600}}')"
+
+section "idle (no heartbeat) -> unchanged ~5 min cadence"
+assert_eq "last row 200s ago -> skip" "False" \
+    "$(should_poll "" '{"ts":9800,"source":"claude","error":null}')"
+assert_eq "last row 300s ago -> poll" "True" \
+    "$(should_poll "" '{"ts":9700,"source":"claude","error":null}')"
+
 harness_summary

@@ -29,7 +29,7 @@ bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags an
 | Writer | Runs | Source | Writes |
 |---|---|---|---|
 | `bin/ingest-claude-statusline.sh` | Every Claude status-line render (agent-statusline pipes the payload in) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | `data/claude/account.jsonl` + `data/claude/<session-id>.jsonl` + `state/quota/claude` (source `statusline`); nothing when the transcript has no `assistant` entry to date the reading, and no row when the session already wrote the same one |
-| `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick; polls every tick while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | `data/claude/account.jsonl` + `state/quota/claude` (source `API`) |
+| `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick; polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | `data/claude/account.jsonl` + `state/quota/claude` (source `API`) |
 | `src/quota_polling/poll_codex.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | `data/codex/account.jsonl` |
 | `src/quota_polling/poll_codex_plan_history.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | `data/codex/account.jsonl` |
 | `src/telemetry/otlp_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | `data/claude/<session-id>.jsonl` |
