@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-04 (push dating and dedup, state-file source names, Claude poller cadence); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
+*Last verified: 2026-10-04 (push dating and dedup, state-file source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
 
 ---
 
@@ -22,8 +22,10 @@ data/
 ├── codex/
 │   └── account.jsonl          account scope: the meter (no Codex session files - see below)
 ├── _unattributed/             telemetry events that carried no usable session id
-└── _archive/                  the pre-2026-09-30 logs, kept after the migration
+└── _archive/                  originals kept by one-time migrations: the 2026-10-04 account files from before split_errors.py (the 2026-09-30 originals were removed by hand)
 ```
+
+**`data/` holds readings only.** A failed poll attempt is not data: since 2026-10-04 it goes to `logs/claude-poll-errors.jsonl` or `logs/codex-poll-errors.jsonl` (same row shape, `error` set), and the error rows written to `data/` before that were moved there by `adhoc_quotas_analysis/split_errors.py`. Readers of `data/` never need to filter errors; the error logs are for failure research (429 rates, lockouts) and for the pollers' own backoff.
 
 **The scope rule — percent is account-scope only.** The quota meter is one account-level number: when two sessions spend at once, there is no per-session percentage — not a hidden one, an undefined one. So:
 
@@ -71,10 +73,10 @@ Two kinds of file in total, easy to conflate:
 | Writer | Writes a history row when | Skips when |
 |---|---|---|
 | Claude push | The render's stdin has `rate_limits` **and** the transcript's last 256 KB contain an `assistant` entry to date it (`observed_at`). Deduplicated per session since 2026-10-04: an account row only when `(observed_at, percents, resets)` differs from this session's last one, a session row only when `(session_cost_usd, prompt_cache, model_id)` does. A new API response with unchanged percents still adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no `assistant` entry in that window: then **nothing** is written, state file included; a re-render of a reading this session already wrote |
-| Claude poller | Every 120 s (every second tick) while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. Errors are logged as rows too. | Mac asleep (launchd fires once on wake) |
+| Claude poller | Every 120 s (every second tick) while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. A failed attempt goes to `logs/claude-poll-errors.jsonl`, not `data/`. | Mac asleep (launchd fires once on wake) |
 | Codex poller | Every tick while a Codex status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old | **Any Codex session file changed in the last 5 min** — the session file is then the fresher source (Sources §4.1); Mac asleep |
 | Telemetry receiver | Whenever a Claude session started after the install sends a batch (every few seconds while requests happen), interactive **and** `claude -p` | Receiver down (Claude Code drops the batch, no disk buffer); sessions started before the install |
-| Codex plan-history poller | 24 h after its last successful attempt, 1 h after a failed one. Errors are logged as rows. | Mac asleep; independent of the Codex poller's skip rules |
+| Codex plan-history poller | 24 h after its last successful attempt, 1 h after a failed one. A failed attempt goes to `logs/codex-poll-errors.jsonl`, not `data/`. | Mac asleep; independent of the Codex poller's skip rules |
 
 Coverage that follows from this:
 
@@ -145,9 +147,9 @@ Session rows exist only from the 2026-09-29/30 deploys: rows written before carr
  "error": null}
 ```
 
-- `api` is the **full raw response**, unfiltered; `error` is `null` on success, otherwise says which stage failed and why.
-- **The poller is unreliable: 8,516 of 12,848 rows carry an error** — 6,239 SSL/network, 2,165 HTTP 429, 112 missing Keychain token **[verified]**. The push path does ~92% of the real work.
-- **Some failures before 2026-09-30 left no row.** `http.client.RemoteDisconnected` (the server closing the connection) is an `OSError`, not a `URLError`, so it escaped the poller's handlers: the run crashed and wrote nothing. 7 such crashes are in `logs/quota-poll.err`, the last on 2026-09-29 **[verified]**. Since the 2026-09-30 fix, any `OSError` is logged as a `network` error row.
+- `api` is the **full raw response**, unfiltered; `error` is always `null` in `data/` (a failed attempt's row, with `error` saying which stage failed and why, is in `logs/claude-poll-errors.jsonl`, §1).
+- **The poller is unreliable: 8,516 of 12,848 attempts failed** (as of 2026-09-29, counted when failures were still rows here) — 6,239 SSL/network, 2,165 HTTP 429, 112 missing Keychain token **[verified]**. The push path does ~92% of the real work.
+- **Some failures before 2026-09-30 left no row.** `http.client.RemoteDisconnected` (the server closing the connection) is an `OSError`, not a `URLError`, so it escaped the poller's handlers: the run crashed and wrote nothing. 7 such crashes are in `logs/quota-poll.err`, the last on 2026-09-29 **[verified]**. Since the 2026-09-30 fix, any `OSError` is logged as a `network` error row (in the error log since 2026-10-04).
 - No `observed_at`: `ts` is the reading time.
 - Older shapes: rows before 2026-08-30 have no `source` key (treat as `"claude"`); rows before 2026-08-26 carry `token_deltas` / `baseline` instead of `api_headers`. Those token deltas were never from the API — the old poller computed them from transcripts, and they were dropped as redundant.
 
@@ -281,6 +283,7 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | 2026-09-30 | Push token fields `session_input_tokens` / `session_output_tokens` removed before ever being deployed | They were mislabelled: the source field is context size, not a session total (Sources §3.1) |
 | **2026-10-04** | **Push dated by the last `assistant` entry, deduplicated per session.** `observed_at` comes from the last API response in the transcript's last 256 KB instead of the last timestamped entry of any type in its last 20 lines; no such entry → nothing written, state file included (it used to get *now*). Rows are appended only when they differ from this session's previous one (§1). State-file `source` renamed `X` → `statusline`, `P` → `API` | Push row density drops by ~99% (one row per API response per session instead of one per ~10 s render: session `bc36b32e`'s 12,163 rows held 27 distinct readings). Older push rows keep their duplicates and may be dated late (§5.2); history is not rewritten |
 | 2026-10-04 | Claude poller polls every 120 s instead of every 60 s tick while a status line is on screen | At 60 s the endpoint refused every other request with a 429 and `Retry-After: 0` (358 of 778 polls on 2026-10-03/04), so poller error rows should drop sharply while the number of successful readings stays about the same |
+| **2026-10-04** | **Failed poll attempts leave `data/`.** All three pollers write a failed attempt to `logs/claude-poll-errors.jsonl` / `logs/codex-poll-errors.jsonl` instead of `account.jsonl`. The existing error rows were moved there, byte-identical, by `adhoc_quotas_analysis/split_errors.py`; the original account files are in `data/_archive/` | Readers of `data/` no longer filter `error != null`: every row there is a reading. Row counts in `data/` drop accordingly (Claude poller rows by about two thirds) |
 
 ---
 
@@ -302,7 +305,7 @@ Deliberately not captured because it already persists elsewhere: Claude per-mess
 | Claim | How |
 |---|---|
 | Row shapes and counts | `python3 -c "import json,collections;c=collections.Counter(tuple(sorted(json.loads(l))) for l in open('data/claude/account.jsonl'));print(c.most_common())"` |
-| Poller failure rate | Count rows where `error` is non-null |
+| Poller failure rate | Count rows in `logs/<agent>-poll-errors.jsonl` against rows of that `source` in `data/<agent>/account.jsonl` |
 | Envelope compression | Apply `quota_model.py`'s `envelope()` and compare row counts |
 | Fractional percent | Scan `five_hour_pct`, `seven_day_pct`, `api.*.utilization`, `usedPercent` for non-integers |
 | Writer behaviour | `bash tests/run.sh`; `tests/test_ingest_claude_statusline.sh` covers the push path, `tests/test_split_by_scope.sh` the migration |

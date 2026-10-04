@@ -13,6 +13,7 @@ mkdir -p "$RT/src" "$TH_TMP2/home/.codex"
 cp -R "$REPO_ROOT/src/quota_polling" "$RT/src/"
 printf '{"tokens":{"access_token":"SECRET-TOKEN-xyz","account_id":"acct-1"}}' > "$TH_TMP2/home/.codex/auth.json"
 LOG="$RT/data/codex/account.jsonl"
+ERRLOG="$RT/logs/codex-poll-errors.jsonl"
 STATE="$RT/state/poll/codex_plan_limit_history"
 
 # run_poller <python expression raised or returned by the fake urlopen>
@@ -56,29 +57,31 @@ jq '.ts -= 86401' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 run_poller "return Resp(b'$BODY')" > /dev/null
 assert_eq "two rows" "2" "$(wc -l < "$LOG" | tr -d ' ')"
 
-section "HTTP 401 -> error row, retried after an hour, not a day"
+section "HTTP 401 -> error row in the error log (not data/), retried after an hour, not a day"
 jq '.ts -= 86401' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 run_poller "raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {}, None)" > /dev/null
-row="$(tail -n 1 "$LOG")"
+assert_eq "data file untouched by the failure" "2" "$(wc -l < "$LOG" | tr -d ' ')"
+row="$(tail -n 1 "$ERRLOG")"
 assert_eq "error row" '{"stage":"http","type":"HTTPError","status":401,"detail":"Unauthorized"}' "$(printf '%s' "$row" | jq -c .error)"
 assert_eq "no response stored" "null" "$(printf '%s' "$row" | jq -c .plan_limit_history)"
 assert_eq "state records a failed attempt" "false" "$(jq -r .ok "$STATE")"
 jq '.ts -= 3601' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 run_poller "return Resp(b'$BODY')" > /dev/null
-assert_eq "retried after an hour" "4" "$(wc -l < "$LOG" | tr -d ' ')"
+assert_eq "retried after an hour" "3" "$(wc -l < "$LOG" | tr -d ' ')"
 
 section "server disconnect -> network error row, no crash"
 jq '.ts -= 86401' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 run_poller "raise http.client.RemoteDisconnected('closed')" > /dev/null
-assert_eq "network error" "network RemoteDisconnected" "$(tail -n 1 "$LOG" | jq -r '"\(.error.stage) \(.error.type)"')"
+assert_eq "network error" "network RemoteDisconnected" "$(tail -n 1 "$ERRLOG" | jq -r '"\(.error.stage) \(.error.type)"')"
 
 section "missing auth file -> auth error row without any file content"
 rm "$TH_TMP2/home/.codex/auth.json"
 jq '.ts -= 86401' "$STATE" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
 run_poller "raise AssertionError('must not be called')" > /dev/null
-assert_eq "auth error" '{"stage":"auth","type":"FileNotFoundError"}' "$(tail -n 1 "$LOG" | jq -c .error)"
+assert_eq "auth error" '{"stage":"auth","type":"FileNotFoundError"}' "$(tail -n 1 "$ERRLOG" | jq -c .error)"
 
 section "the token never reaches the log"
-assert_not_contains "no token in any row" "$(cat "$LOG")" "SECRET-TOKEN-xyz"
+assert_not_contains "no token in any row" "$(cat "$LOG" "$ERRLOG")" "SECRET-TOKEN-xyz"
+assert_eq "data file holds no error row" "0" "$(jq -c 'select(.error != null)' "$LOG" | wc -l | tr -d ' ')"
 
 harness_summary

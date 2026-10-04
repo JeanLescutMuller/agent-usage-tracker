@@ -72,6 +72,8 @@ import _quota_common
 # src/data/ instead of the real sibling-of-src/ data/.
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 QUOTA_LOG_FILE = DATA_DIR / "codex" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
+# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
+ERROR_LOG_FILE = DATA_DIR.parent / "logs" / "codex-poll-errors.jsonl"
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat" / "codex"
 
@@ -179,11 +181,10 @@ def _last_codex_log_ts() -> int | None:
     in the common case (the Codex log only ever gets
     `source: "codex"` rows written to it since the 2026-08-31 per-provider
     split), but kept as a cheap defensive check against a stray/malformed
-    row rather than trusting file identity alone."""
-    for d_row in reversed(_quota_common.tail_json_rows(QUOTA_LOG_FILE)):
-        if d_row.get("source") == "codex":
-            return d_row.get("ts")
-    return None
+    row rather than trusting file identity alone. Since 2026-10-04 failed
+    attempts live in ERROR_LOG_FILE, so both files are read."""
+    d_row = _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("codex",))
+    return d_row["ts"] if d_row else None
 
 
 def _codex_session_recently_active(now: float) -> bool:
@@ -239,8 +240,7 @@ def main() -> None:
         "codex_usage": d_usage,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    with QUOTA_LOG_FILE.open("a") as f:
-        f.write(json.dumps(d_record) + "\n")
+    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
 
 
 if __name__ == "__main__":

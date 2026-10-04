@@ -29,9 +29,9 @@ bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags an
 | Writer | Runs | Source | Writes |
 |---|---|---|---|
 | `bin/ingest-claude-statusline.sh` | Every Claude status-line render (agent-statusline pipes the payload in) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | `data/claude/account.jsonl` + `data/claude/<session-id>.jsonl` + `state/quota/claude` (source `statusline`); nothing when the transcript has no `assistant` entry to date the reading, and no row when the session already wrote the same one |
-| `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick; polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | `data/claude/account.jsonl` + `state/quota/claude` (source `API`) |
-| `src/quota_polling/poll_codex.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | `data/codex/account.jsonl` |
-| `src/quota_polling/poll_codex_plan_history.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | `data/codex/account.jsonl` |
+| `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick; polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | `data/claude/account.jsonl` + `state/quota/claude` (source `API`); a failed attempt only to `logs/claude-poll-errors.jsonl` |
+| `src/quota_polling/poll_codex.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | `data/codex/account.jsonl`; a failed attempt only to `logs/codex-poll-errors.jsonl` |
+| `src/quota_polling/poll_codex_plan_history.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | `data/codex/account.jsonl`; a failed attempt only to `logs/codex-poll-errors.jsonl` |
 | `src/telemetry/otlp_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | `data/claude/<session-id>.jsonl` |
 
 Details, row shapes and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
@@ -61,12 +61,12 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
     │   │   └── <session-id>.jsonl        session scope: push session rows + telemetry rows (never a percent)
     │   ├── codex/account.jsonl           account scope: Codex poll + plan-history rows
     │   ├── _unattributed/                telemetry events with no usable session id (created on the first one)
-    │   └── _archive/                     pre-2026-09-30 logs, kept after the one-time split_by_scope.py migration
+    │   └── _archive/                     originals kept by one-time migrations (2026-10-04 split_errors.py; the 2026-09-30 ones were removed by hand)
     ├── state/
     │   ├── quota/claude                  latest reading only (see the contract above)
     │   ├── ingest/<session-id>           what each session's push last wrote, for dedup; pruned after 30 days idle
     │   └── poll/codex_plan_limit_history last plan-history attempt
-    ├── logs/                             quota-poll.{log,err}, otel-receiver.{log,err}
+    ├── logs/                             quota-poll.{log,err}, otel-receiver.{log,err}, {claude,codex}-poll-errors.jsonl (failed poll attempts, never in data/)
     ├── com.jeanlescut.agent-usage-tracker.plist        poll LaunchAgent (symlinked from ~/Library/LaunchAgents/)
     └── com.jeanlescut.agent-usage-tracker.otel.plist   receiver LaunchAgent (same)
 

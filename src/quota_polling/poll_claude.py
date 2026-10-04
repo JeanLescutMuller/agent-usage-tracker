@@ -60,6 +60,8 @@ import _quota_common
 # src/data/ instead of the real sibling-of-src/ data/.
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 QUOTA_LOG_FILE = DATA_DIR / "claude" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
+# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
+ERROR_LOG_FILE = DATA_DIR.parent / "logs" / "claude-poll-errors.jsonl"
 
 # The "latest known quota" state file agent-statusline displays (README.md's
 # "Contract with agent-statusline"). Written here with source "API" via
@@ -195,11 +197,9 @@ def _epoch(iso: str | None) -> str:
 
 
 def _last_log_row() -> dict | None:
-    """The last logged row (any source, any outcome) - used only for the
-    idle-cadence fallback below, which deliberately doesn't care which
-    poller (Claude or Codex) was last active on this machine."""
-    rows = _quota_common.tail_json_rows(QUOTA_LOG_FILE)
-    return rows[-1] if rows else None
+    """The last logged row (any source, any outcome, push rows included) -
+    used only for the idle-cadence fallback below."""
+    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE)
 
 
 def _last_claude_log_row() -> dict | None:
@@ -214,11 +214,10 @@ def _last_claude_log_row() -> dict | None:
     into a live 429 lockout it should have been sitting out - the whole
     point of the backoff check below. The Codex interleaving is gone since
     the 2026-08-31 per-provider file split, but the same discipline still
-    applies to claude_statusline rows within this file, so the filter stays)."""
-    for row in reversed(_quota_common.tail_json_rows(QUOTA_LOG_FILE)):
-        if row.get("source", "claude") == "claude":
-            return row
-    return None
+    applies to claude_statusline rows within this file, so the filter stays).
+    Since 2026-10-04 a failed attempt (the 429 carrying Retry-After) lives in
+    ERROR_LOG_FILE, so both files are read and the newest row wins."""
+    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("claude",))
 
 
 def _should_poll(now: float) -> bool:
@@ -263,8 +262,7 @@ def main() -> None:
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    with QUOTA_LOG_FILE.open("a") as f:
-        f.write(json.dumps(d_record) + "\n")
+    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
 
     if d_api is not None:
         five_hour = d_api.get("five_hour") or {}

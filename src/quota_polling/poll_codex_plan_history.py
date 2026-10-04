@@ -32,10 +32,14 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import _quota_common
+
 # Deployed at ~/opt/agent-usage-tracker/src/quota_polling/ - three parents up
 # is the runtime root holding data/ and state/ (same as poll_codex.py).
 RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
 QUOTA_LOG_FILE = RUNTIME_DIR / "data" / "codex" / "account.jsonl"  # percent-bearing, so account scope
+# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
+ERROR_LOG_FILE = RUNTIME_DIR / "logs" / "codex-poll-errors.jsonl"
 STATE_FILE = RUNTIME_DIR / "state" / "poll" / "codex_plan_limit_history"
 AUTH_FILE = Path.home() / ".codex" / "auth.json"
 URL = "https://chatgpt.com/backend-api/wham/usage/plan_limit_history?days=7"
@@ -98,9 +102,7 @@ def main() -> None:
         "plan_limit_history": d_history,  # full raw response, unfiltered
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    QUOTA_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with QUOTA_LOG_FILE.open("a") as f:
-        f.write(json.dumps(d_record) + "\n")
+    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
 
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps({"ts": d_record["ts"], "ok": d_error is None}))

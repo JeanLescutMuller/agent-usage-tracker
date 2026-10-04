@@ -43,6 +43,35 @@ def tail_json_rows(log_file: Path) -> list[dict]:
     return rows
 
 
+def append_poll_row(d_record: dict, data_file: Path, error_file: Path) -> None:
+    """Appends one poll attempt as a JSONL row: a reading (`error` None) to
+    the account-scope data file, a failed attempt to the poller's error log
+    under logs/. Since 2026-10-04 data/ holds readings only, so its readers
+    never filter errors; the error log keeps the failure history (429 rates,
+    lockouts) for research and for the pollers' own backoff and cadence,
+    read back by last_poll_row. One write() with O_APPEND, like every writer
+    here, so concurrent appends never interleave."""
+    path = data_file if d_record.get("error") is None else error_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(d_record) + "\n")
+
+
+def last_poll_row(data_file: Path, error_file: Path, sources: tuple[str, ...] | None = None) -> dict | None:
+    """The newest row by `ts` across a poller's data file and error log -
+    its last attempt, whichever way it went. `sources` limits it to rows
+    whose `source` (missing = "claude", the oldest rows) is listed; None
+    takes any row, push rows included."""
+    l_rows = [
+        d_row
+        for path in (data_file, error_file)
+        for d_row in tail_json_rows(path)
+        if isinstance(d_row.get("ts"), (int, float))
+        and (sources is None or d_row.get("source", "claude") in sources)
+    ]
+    return max(l_rows, key=lambda d_row: d_row["ts"]) if l_rows else None
+
+
 def is_fresh(path: Path, window_seconds: float, now: float) -> bool:
     """True if `path`'s mtime is within window_seconds of now - the shared
     shape behind both pollers' heartbeat-driven speedup. A missing file just

@@ -32,17 +32,20 @@ section "existing failure classes keep their stage"
 assert_eq "URLError stays a network error" "network URLError" \
     "$(fetch_with 'urllib.error.URLError("offline")')"
 
-# should_poll <heartbeat age s or ""> <rows JSON lines> -> True/False at now=10000
-# Points QUOTA_LOG_FILE and HEARTBEAT_FILE at temp files; "" = no heartbeat.
+# should_poll <heartbeat age s or ""> <data rows> [error-log rows] -> True/False
+# at now=10000. Points QUOTA_LOG_FILE, ERROR_LOG_FILE and HEARTBEAT_FILE at
+# temp files; "" = no heartbeat.
 should_poll() {
     local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/th-poll.XXXXXX")"
     printf '%s\n' "$2" > "$dir/account.jsonl"
+    printf '%s\n' "${3:-}" > "$dir/errors.jsonl"
     python3 -c "
 import os, sys
 from pathlib import Path
 sys.path.insert(0, '$QUOTA_POLLING_DIR')
 import poll_claude
 poll_claude.QUOTA_LOG_FILE = Path('$dir/account.jsonl')
+poll_claude.ERROR_LOG_FILE = Path('$dir/errors.jsonl')
 poll_claude.HEARTBEAT_FILE = Path('$dir/heartbeat')
 age = '$1'
 if age:
@@ -63,13 +66,45 @@ assert_eq "push rows in between don't count as polls" "True" \
 {"ts":9990,"source":"claude_statusline"}')"
 assert_eq "no poller row yet -> poll" "True" \
     "$(should_poll 5 '{"ts":9990,"source":"claude_statusline"}')"
-assert_eq "Retry-After still wins while watched" "False" \
-    "$(should_poll 5 '{"ts":9700,"source":"claude","error":{"retry_after_s":600}}')"
+assert_eq "Retry-After still wins while watched, read from the error log" "False" \
+    "$(should_poll 5 '{"ts":9600,"source":"claude","error":null}' '{"ts":9700,"source":"claude","error":{"retry_after_s":600}}')"
+assert_eq "a failed attempt 60s ago counts as the last poll" "False" \
+    "$(should_poll 5 '{"ts":9800,"source":"claude","error":null}' '{"ts":9940,"source":"claude","error":{"stage":"http","status":429}}')"
 
 section "idle (no heartbeat) -> unchanged ~5 min cadence"
+assert_eq "a failed attempt 200s ago holds off the idle poll" "False" \
+    "$(should_poll "" '{"ts":9000,"source":"claude","error":null}' '{"ts":9800,"source":"claude","error":{"stage":"network"}}')"
 assert_eq "last row 200s ago -> skip" "False" \
     "$(should_poll "" '{"ts":9800,"source":"claude","error":null}')"
 assert_eq "last row 300s ago -> poll" "True" \
     "$(should_poll "" '{"ts":9700,"source":"claude","error":null}')"
+
+# poll_once <fetch_usage return expression> -> runs main() with the token
+# and request faked, against temp files; prints "<data lines> <error lines>".
+poll_once() {
+    local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/th-poll.XXXXXX")"
+    python3 -c "
+import sys
+from pathlib import Path
+sys.path.insert(0, '$QUOTA_POLLING_DIR')
+import poll_claude
+poll_claude.QUOTA_LOG_FILE = Path('$dir/data/account.jsonl')
+poll_claude.ERROR_LOG_FILE = Path('$dir/logs/errors.jsonl')
+poll_claude.STATE_FILE = Path('$dir/state')
+poll_claude.HEARTBEAT_FILE = Path('$dir/heartbeat')
+poll_claude.fetch_token = lambda: ('dummy', None)
+poll_claude.fetch_usage = lambda token: $1
+poll_claude.main()
+" > /dev/null 2>&1
+    printf '%s %s' "$(cat "$dir/data/account.jsonl" 2>/dev/null | wc -l | tr -d ' ')" \
+        "$(cat "$dir/logs/errors.jsonl" 2>/dev/null | wc -l | tr -d ' ')"
+    rm -rf "$dir"
+}
+
+section "a reading goes to data/, a failed attempt only to the error log"
+assert_eq "success -> one data row, no error row" "1 0" \
+    "$(poll_once "({'five_hour': {'utilization': 5}}, {}, None)")"
+assert_eq "429 -> no data row, one error row" "0 1" \
+    "$(poll_once "(None, None, {'stage': 'http', 'status': 429})")"
 
 harness_summary
