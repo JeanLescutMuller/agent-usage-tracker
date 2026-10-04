@@ -12,7 +12,7 @@ agent-usage-tracker/
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, when, and where it lands
 │                                 # Other projects link to these rather than restating them. Keep them tested and dated.
 ├── bin/
-│   └── ingest-claude-statusline.sh  # the statusline's entry point: raw payload on stdin -> account row, session row, state/quota/claude (tag X)
+│   └── ingest-claude-statusline.sh  # the statusline's entry point: raw payload on stdin -> account row, session row, state/quota/claude (source "statusline")
 ├── src/
 │   ├── quota_polling/            # LaunchAgent-scheduled, deployed, unattended
 │   │   ├── poll_all.py                          # the LaunchAgent entry point, runs each poller as a subprocess

@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-09-30 (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
+*Last verified: 2026-10-04 (push dating and dedup, state-file source names); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
 
 ---
 
@@ -49,8 +49,8 @@ Two kinds of file in total, easy to conflate:
 
 | Writer | Scheduled by | Upstream source | Writes |
 |---|---|---|---|
-| **Claude push** — `bin/ingest-claude-statusline.sh` | Every Claude status-line render: agent-statusline's Claude provider pipes its raw stdin payload in | Statusline stdin (Sources §3.1) | `claude/account.jsonl` + `claude/<session-id>.jsonl` (both `source: "claude_statusline"`) + `state/quota/claude` (tag `X`) |
-| **Claude poller** — `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick, via `poll_all.py` | `GET /api/oauth/usage` (Sources §3.5) | `claude/account.jsonl` (`source: "claude"`) + `state/quota/claude` (tag `P`) |
+| **Claude push** — `bin/ingest-claude-statusline.sh` | Every Claude status-line render: agent-statusline's Claude provider pipes its raw stdin payload in | Statusline stdin (Sources §3.1) | `claude/account.jsonl` + `claude/<session-id>.jsonl` (both `source: "claude_statusline"`) + `state/quota/claude` (source `statusline`) |
+| **Claude poller** — `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick, via `poll_all.py` | `GET /api/oauth/usage` (Sources §3.5) | `claude/account.jsonl` (`source: "claude"`) + `state/quota/claude` (source `API`) |
 | **Codex poller** — `src/quota_polling/poll_codex.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | `codex/account.jsonl` (`source: "codex"`) |
 | **Codex plan-history poller** — `src/quota_polling/poll_codex_plan_history.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | `codex/account.jsonl` (`source: "codex_plan_limit_history"`) + `state/poll/codex_plan_limit_history` (last attempt) |
 | **Telemetry receiver** — `src/telemetry/otlp_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `claude/<session-id>.jsonl` (`source: "claude_otel"`, §9) |
@@ -70,7 +70,7 @@ Two kinds of file in total, easy to conflate:
 
 | Writer | Writes a history row when | Skips when |
 |---|---|---|
-| Claude push | The render's stdin has `rate_limits` **and** the transcript's last lines give a timestamp for `observed_at`. No dedup: every such render adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no usable transcript timestamp — the state file is then still updated, with `observed_at` = now |
+| Claude push | The render's stdin has `rate_limits` **and** the transcript's last 256 KB contain an `assistant` entry to date it (`observed_at`). Deduplicated per session since 2026-10-04: an account row only when `(observed_at, percents, resets)` differs from this session's last one, a session row only when `(session_cost_usd, prompt_cache, model_id)` does. A new API response with unchanged percents still adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no `assistant` entry in that window: then **nothing** is written, state file included; a re-render of a reading this session already wrote |
 | Claude poller | Every tick while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. Errors are logged as rows too. | Mac asleep (launchd fires once on wake) |
 | Codex poller | Every tick while a Codex status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old | **Any Codex session file changed in the last 5 min** — the session file is then the fresher source (Sources §4.1); Mac asleep |
 | Telemetry receiver | Whenever a Claude session started after the install sends a batch (every few seconds while requests happen), interactive **and** `claude -p` | Receiver down (Claude Code drops the batch, no disk buffer); sessions started before the install |
@@ -114,8 +114,8 @@ Account row:
 | Field | Unit | Granularity | Meaning |
 |---|---|---|---|
 | `ts`, `iso` | epoch s / ISO | — | Append time. **Not** when the reading was true |
-| `observed_at` | epoch s | — | Timestamp of the transcript's last message: when Claude Code's in-memory reading became true. **The only trustworthy time key**, and the join key to session rows; pre-fix rows are one hour late during DST (§5.3) |
-| `five_hour_pct`, `seven_day_pct` | % | Account-wide | Level within the current window, resets to 0 at window end. Written as received; always whole in practice (§5.1) |
+| `observed_at` | epoch s | — | Timestamp of the transcript's last `assistant` entry (API response): when Claude Code's in-memory reading became true, or slightly before, since an unlogged `quota_check` request can also refresh it. **The only trustworthy time key**, and the join key to session rows. Before 2026-10-04 it was the last entry of any type, so older rows can be dated later than the reading (§5.2); pre-fix rows are also one hour late during DST (§5.3) |
+| `five_hour_pct`, `seven_day_pct` | % | Account-wide | Level within the current window, resets to 0 at window end. Written as received; always whole in practice (§5.1). A window missing from stdin is written as 0: that is what it is, since stdin omits `five_hour` when no 5-hour window is open and the poller's API then reports `utilization` 0 **[verified 2026-10-02]** |
 | `five_hour_resets_at`, `seven_day_resets_at` | epoch s, as a string | Account-wide | Window end; stable while the window runs, so it doubles as a window id. `null` when absent |
 | `observed_by_session` | — | — | The session that was rendering when the reading was taken. **Who observed it, not whose usage it is.** `null` when the payload had none. Absent on rows before 2026-09-29's deploy |
 
@@ -207,7 +207,7 @@ Only **finished** windows appear, and only windows that had usage. Each fetch ov
 
 Not history; one line, overwritten; fields separated by the ASCII FS character (`\034`).
 
-`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Both Claude writers compare their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `X` (push) or `P` (poller).
+`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Both Claude writers compare their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `statusline` (push) or `API` (poller), information only: agent-statusline reads the file whatever the source. Until 2026-10-04 it was `X` / `P`, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
 
 `~/opt/agent-statusline/state/quota/codex` (agent-statusline's, listed for completeness) has **four** fields: `five_pct, five_reset, week_pct, week_reset`, with the resets as the TUI's display strings (e.g. `16:05`, `11:05 on 28 Sep`), not epochs, and no `source` or `observed_at`. It is written only by the Codex status line, at most once per 60 s, with freshness tracked in a sidecar `state/quota/codex.timestamp` file rather than by comparing readings. agent-statusline's `state/heartbeat/{claude,codex}` are touched on every render; this project's pollers read their mtime to tell a status line is live.
 
@@ -235,6 +235,7 @@ five_hour_pct  0, observed_at 1790078292   <- a day-old reading re-pushed by an 
 - **Key readings by `observed_at`, never by line order or by `ts`.**
 - Apply the envelope **per window**, keyed by `resets_at`.
 - **100,158 usable Claude rows collapse to 687** over 30 days — 146×, about 30 rows a day **[verified]**.
+- **Push rows before 2026-10-04 can be dated late.** Their `observed_at` was the last transcript entry of any type, so an attachment or user message after the last API response moved it forward: session `bc36b32e`'s frozen reading, taken at 12:58:48Z on 2026-09-30, is dated 13:37:46Z **[verified]**. They also repeat every ~10 s while a session stays open (96% of push rows were exact repeats of that session's previous one). The envelope rule handles both; from 2026-10-04, readings are dated by the last `assistant` entry and repeats are not written.
 
 ### 5.3 Push `observed_at` is one hour too late during daylight-saving time — fixed in code 2026-09-30
 
@@ -278,6 +279,7 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | 2026-09-30 | Provider scripts deployed under `~/opt/agent-statusline/providers/`, symlinked from `~/.claude/` and `~/.codex/` | The old real-file copy had gone stale unnoticed |
 | **2026-09-30** | **Repo split**: usage tracking moves from `agent-statusline` into this repo, `agent-usage-tracker`. Runtime `~/opt/agent-statusline/{data,state/quota/claude,state/poll}` → `~/opt/agent-usage-tracker/…` (moved, not rewritten); LaunchAgents renamed `com.jeanlescut.agent-usage-tracker{,.otel}`. The push script becomes `bin/ingest-claude-statusline.sh` and takes the raw statusline payload on stdin instead of 9 arguments | None: row shapes, `source` values (`claude_statusline` included) and the scope rule are unchanged. Only paths moved |
 | 2026-09-30 | Push token fields `session_input_tokens` / `session_output_tokens` removed before ever being deployed | They were mislabelled: the source field is context size, not a session total (Sources §3.1) |
+| **2026-10-04** | **Push dated by the last `assistant` entry, deduplicated per session.** `observed_at` comes from the last API response in the transcript's last 256 KB instead of the last timestamped entry of any type in its last 20 lines; no such entry → nothing written, state file included (it used to get *now*). Rows are appended only when they differ from this session's previous one (§1). State-file `source` renamed `X` → `statusline`, `P` → `API` | Push row density drops by ~99% (one row per API response per session instead of one per ~10 s render: session `bc36b32e`'s 12,163 rows held 27 distinct readings). Older push rows keep their duplicates and may be dated late (§5.2); history is not rewritten |
 
 ---
 

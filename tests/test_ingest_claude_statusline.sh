@@ -2,9 +2,10 @@
 # End-to-end tests for bin/ingest-claude-statusline.sh - the free path that
 # takes the Claude statusline's raw stdin payload and (1) appends a
 # claude_statusline account row plus a session row whenever the transcript
-# gives a precise timestamp, and (2) always updates the "latest known
-# quota" state file (tagged X) - using that same precise timestamp when
-# available, or "now" as a fallback otherwise. See the script's own header
+# gives a precise timestamp (the last assistant entry's), deduplicated per
+# session, and (2) updates the "latest known quota" state file (source
+# "statusline") with that same timestamp - and writes nothing at all
+# without one. See the script's own header
 # comment and adhoc_quotas_analysis/AGENTS.md's "GET /api/oauth/usage 429s"
 # investigation for why the free path exists at all.
 set -uo pipefail
@@ -54,42 +55,44 @@ assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "nothing logged" "$LOG"
 assert_file_missing "state file untouched" "$STATE"
 
-section "no transcript_path -> log untouched, state file still written via a now fallback"
+section "no transcript_path -> nothing written anywhere (no date beats a wrong date)"
 reset
-before="$(date +%s)"
 run_push "" 42 "2026-01-01T00:00:00Z" 55 "2026-01-05T00:00:00Z"
-after="$(date +%s)"
 assert_status "exits 0" 0 "$TH_STATUS"
-assert_file_missing "no precise timestamp, so no history row" "$LOG"
-assert_file_exists "state file written anyway - still a live reading" "$STATE"
-IFS="$SEP" read -r st_five st_five_reset st_week st_week_reset st_source st_observed < "$STATE"
-assert_eq "state 5h percent" "42" "$st_five"
-assert_eq "state tagged X" "X" "$st_source"
-[ "$st_observed" -ge "$before" ] && [ "$st_observed" -le "$after" ]
-assert_status "observed_at falls back to roughly now" 0 $?
+assert_file_missing "no history row" "$LOG"
+assert_file_missing "no state file either - never dated 'now'" "$STATE"
 
-section "transcript path doesn't exist -> same fallback behavior"
+section "transcript path doesn't exist -> nothing written"
 reset
 run_push "$TH_HOME/nope.jsonl" 42 "" 55 ""
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "no history row" "$LOG"
-assert_file_exists "state file still written" "$STATE"
+assert_file_missing "no state file" "$STATE"
 
-section "transcript exists but has no timestamped lines -> same fallback behavior"
+section "transcript has timestamps but no assistant entry -> nothing written"
 reset
-write_transcript '{"type":"summary","leafUuid":"x"}'
+write_transcript "$(cat <<'EOF2'
+{"type":"user","timestamp":"2026-01-01T10:00:00.000Z"}
+{"type":"attachment","timestamp":"2026-01-01T10:00:01.000Z"}
+{"type":"summary","leafUuid":"x"}
+EOF2
+)"
 run_push "$TRANSCRIPT" 42 "" 55 ""
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "no history row" "$LOG"
-assert_file_exists "state file still written" "$STATE"
+assert_file_missing "no state file" "$STATE"
 
-section "first genuine reading (valid transcript) -> a precise history row and state write"
+section "first genuine reading -> dated by the last assistant entry, not by later lines"
 reset
-write_transcript "$(cat <<'EOF'
+write_transcript "$(cat <<'EOF2'
 {"type":"user","timestamp":"2026-01-01T10:00:00.000Z"}
 {"type":"assistant","timestamp":"2026-01-01T10:00:05.500Z"}
+{"type":"attachment","timestamp":"2026-01-01T10:39:00.000Z"}
+{"type":"user","timestamp":"2026-01-01T10:40:00.000Z","message":{"content":"quoting {\"type\":\"assistant\",\"timestamp\":\"2026-01-01T11:00:00.000Z\"}"}}
+{"type":"last-prompt"}
+{"type":"ai-title"}
 {"type":"summary","leafUuid":"x"}
-EOF
+EOF2
 )"
 run_push "$TRANSCRIPT" 42 "2026-01-01T15:00:00Z" 55 "2026-01-08T00:00:00Z"
 assert_status "exits 0" 0 "$TH_STATUS"
@@ -99,7 +102,7 @@ assert_contains "tagged claude_statusline" "$row" '"source":"claude_statusline"'
 assert_contains "carries the five-hour percent" "$row" '"five_hour_pct":42'
 assert_contains "carries the seven-day percent" "$row" '"seven_day_pct":55'
 assert_contains "carries the five-hour reset" "$row" '"five_hour_resets_at":"2026-01-01T15:00:00Z"'
-assert_contains "observed_at is the transcript's last timestamp, not append time" \
+assert_contains "observed_at is the last assistant entry's timestamp" \
     "$row" '"observed_at":1767261605'
 assert_file_exists "state file written" "$STATE"
 IFS="$SEP" read -r st_five st_five_reset st_week st_week_reset st_source st_observed < "$STATE"
@@ -107,34 +110,77 @@ assert_eq "state 5h percent" "42" "$st_five"
 assert_eq "state 5h reset" "2026-01-01T15:00:00Z" "$st_five_reset"
 assert_eq "state 7d percent" "55" "$st_week"
 assert_eq "state 7d reset" "2026-01-08T00:00:00Z" "$st_week_reset"
-assert_eq "state tagged X (push)" "X" "$st_source"
-assert_eq "state observed_at matches the log row's precise timestamp" "1767261605" "$st_observed"
+assert_eq "state source is 'statusline'" "statusline" "$st_source"
+assert_eq "state observed_at matches the log row's" "1767261605" "$st_observed"
 
-section "same transcript again -> the log has no dedup any more, appends regardless"
-run_push "$TRANSCRIPT" 42 "2026-01-01T15:00:00Z" 55 "2026-01-08T00:00:00Z"
-assert_status "exits 0" 0 "$TH_STATUS"
-assert_eq "a second, duplicate-looking row is appended" "2" "$(row_count)"
+section "a long bookkeeping tail still finds the assistant entry (byte window, not 20 lines)"
+reset
+{
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-01-01T10:00:05.000Z"}'
+    for i in $(seq 1 200); do printf '%s\n' '{"type":"mode","mode":"default"}'; done
+} > "$TRANSCRIPT"
+run_push "$TRANSCRIPT" 42 "" 55 ""
+assert_contains "dated past 200 bookkeeping lines" "$(cat "$LOG")" '"observed_at":1767261605'
 
-section "a genuinely newer transcript entry -> appends a third row"
-cat >> "$TRANSCRIPT" <<'EOF'
-{"type":"assistant","timestamp":"2026-01-01T10:05:00.000Z"}
-EOF
-run_push "$TRANSCRIPT" 43 "2026-01-01T15:00:00Z" 55 "2026-01-08T00:00:00Z"
-assert_status "exits 0" 0 "$TH_STATUS"
-assert_eq "three rows now" "3" "$(row_count)"
-IFS="$SEP" read -r st_five _ _ _ _ st_observed < "$STATE"
-assert_eq "state file picks up the newer 5h percent" "43" "$st_five"
-assert_eq "state file's observed_at advances too" "1767261900" "$st_observed"
+section "the window's cut first line is skipped, not fatal"
+reset
+{
+    printf '{"type":"assistant","timestamp":"2026-01-01T09:00:00.000Z","pad":"%s"}\n' "$(head -c 300000 /dev/zero | tr '\0' x)"
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-01-01T10:00:05.000Z"}'
+} > "$TRANSCRIPT"
+run_push "$TRANSCRIPT" 42 "" 55 ""
+assert_contains "the complete assistant line after the cut one dates it" "$(cat "$LOG")" '"observed_at":1767261605'
 
-section "an older/equal observed_at does not regress the state file"
-run_push "$TRANSCRIPT" 99 "2026-01-01T15:00:00Z" 55 "2026-01-08T00:00:00Z"
-# Same transcript (same last timestamp, observed_at unchanged) but a
-# different five_pct - if the state file compared correctly it stays at 43,
-# not 99, even though the log itself still appends unconditionally.
+section "re-renders of the same reading append nothing (per-session dedup)"
+reset
+write_transcript '{"type":"assistant","timestamp":"2026-01-01T10:00:05.000Z"}'
+run_push "$TRANSCRIPT" 42 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
+run_push "$TRANSCRIPT" 42 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
+run_push "$TRANSCRIPT" 42 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
 assert_status "exits 0" 0 "$TH_STATUS"
-assert_eq "four rows in the log (still no dedup there)" "4" "$(row_count)"
-IFS="$SEP" read -r st_five _ _ _ _ _ < "$STATE"
-assert_eq "state file 5h percent unchanged (99 was not newer)" "43" "$st_five"
+assert_eq "one account row for three renders" "1" "$(row_count)"
+assert_eq "one session row for three renders" "1" "$(wc -l < "$SESSION_DIR/sess-1.jsonl" | tr -d ' ')"
+assert_file_exists "key file remembers what this session wrote" "$TH_HOME/opt/agent-usage-tracker/state/ingest/sess-1"
+
+section "another session seeing the same reading is its own observation"
+run_push "$TRANSCRIPT" 42 "" 55 "" "sess-2" 0.1 "" "claude-opus-5-5"
+assert_eq "second account row, observed by sess-2" "2" "$(row_count)"
+assert_eq "observed_by_session" "sess-2" "$(tail -1 "$LOG" | jq -r .observed_by_session)"
+
+section "a new API response with unchanged percents -> one new account row"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-01-01T10:05:00.000Z"}' >> "$TRANSCRIPT"
+run_push "$TRANSCRIPT" 42 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
+assert_eq "three account rows" "3" "$(row_count)"
+assert_eq "session row unchanged (cost, model, cache didn't move)" "1" "$(wc -l < "$SESSION_DIR/sess-1.jsonl" | tr -d ' ')"
+IFS="$SEP" read -r _ _ _ _ _ st_observed < "$STATE"
+assert_eq "state file's observed_at advances" "1767261900" "$st_observed"
+
+section "a percent change at the same observed_at -> new account row"
+run_push "$TRANSCRIPT" 43 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
+assert_eq "four account rows" "4" "$(row_count)"
+
+section "a cost change -> new session row"
+run_push "$TRANSCRIPT" 43 "" 55 "" "sess-1" 0.7 "" "claude-opus-5-5"
+assert_eq "four account rows still" "4" "$(row_count)"
+assert_eq "two session rows" "2" "$(wc -l < "$SESSION_DIR/sess-1.jsonl" | tr -d ' ')"
+
+section "an idle session's frozen reading never beats a fresher one"
+reset
+FRESH="$TH_HOME/fresh.jsonl"
+printf '%s\n' '{"type":"assistant","timestamp":"2026-01-02T10:00:00.000Z"}' > "$FRESH"
+{
+    printf '%s\n' '{"type":"assistant","timestamp":"2026-01-01T10:00:00.000Z"}'
+    printf '%s\n' '{"type":"attachment","timestamp":"2026-01-01T12:00:00.000Z"}'
+    for i in $(seq 1 30); do printf '%s\n' '{"type":"atis-latch"}'; done
+} > "$TRANSCRIPT"
+run_push "$FRESH" 16 "" 18 "" "fresh-session"
+run_push "$TRANSCRIPT" 0 "" 11 "" "idle-session"
+IFS="$SEP" read -r st_five _ st_week _ st_source st_observed < "$STATE"
+assert_eq "state keeps the fresh 5h percent" "16" "$st_five"
+assert_eq "state keeps the fresh 7d percent" "18" "$st_week"
+assert_eq "state keeps the fresh observed_at" "1767348000" "$st_observed"
+run_push "$TRANSCRIPT" 0 "" 11 "" "idle-session"
+assert_eq "idle re-render: no new account row" "2" "$(row_count)"
 
 section "empty resets_at fields become JSON null, not empty strings"
 reset

@@ -27,3 +27,7 @@ Every collector (push path, pollers, telemetry receiver) is deployed on the MacB
 ### Not obtainable from any source
 
 For the record, so nobody re-investigates: Codex spend at any granularity on a Plus account (403 or `null` everywhere); account-wide spend for either agent; quota percent per session or thread (Codex's `thread_usage/query_v2` returns `unavailable`); usage while the Mac is asleep or off (Codex's `plan_limit_history` recovers the last 7 days, Claude has no equivalent); a per-client breakdown for Claude (claude.ai web / mobile, other machines).
+
+## Claude poller cadence without agent-statusline
+
+Parked 2026-10-04. `poll_claude.py` polls every tick only while agent-statusline's heartbeat says a status line is on screen; without agent-statusline it stays on its ~5 min idle cadence even while Claude sessions are active. A second liveness signal, recently modified transcripts under `~/.claude/projects/**/*.jsonl`, would fix that, the way `poll_codex.py` uses Codex session files.

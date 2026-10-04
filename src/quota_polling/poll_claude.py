@@ -60,9 +60,10 @@ DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 QUOTA_LOG_FILE = DATA_DIR / "claude" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
 
 # The "latest known quota" state file agent-statusline displays (README.md's
-# "Contract with agent-statusline"). Written here with source "P" via
+# "Contract with agent-statusline"). Written here with source "API" via
 # _quota_common.write_state_if_newer, same format and same freshness rule
-# as ../../bin/ingest-claude-statusline.sh's "X" writes to this same file.
+# as ../../bin/ingest-claude-statusline.sh's "statusline" writes to this
+# same file.
 STATE_FILE = Path.home() / "opt" / "agent-usage-tracker" / "state" / "quota" / "claude"
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -264,7 +265,7 @@ def main() -> None:
             _epoch(five_hour.get("resets_at")),
             round(seven_day.get("utilization") or 0),
             _epoch(seven_day.get("resets_at")),
-            "P",
+            "API",
             d_record["ts"],
         )
 
