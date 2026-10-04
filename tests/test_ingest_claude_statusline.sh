@@ -4,7 +4,7 @@
 # claude_statusline account row plus a session row whenever the transcript
 # gives a precise timestamp (the last assistant entry's), deduplicated per
 # session, and (2) updates the "latest known quota" state file (source
-# "statusline") with that same timestamp - and writes nothing at all
+# "claude_statusline") with that same timestamp - and writes nothing at all
 # without one. See the script's own header
 # comment and adhoc_quotas_analysis/AGENTS.md's "GET /api/oauth/usage 429s"
 # investigation for why the free path exists at all.
@@ -110,7 +110,7 @@ assert_eq "state 5h percent" "42" "$st_five"
 assert_eq "state 5h reset" "2026-01-01T15:00:00Z" "$st_five_reset"
 assert_eq "state 7d percent" "55" "$st_week"
 assert_eq "state 7d reset" "2026-01-08T00:00:00Z" "$st_week_reset"
-assert_eq "state source is 'statusline'" "statusline" "$st_source"
+assert_eq "state source is 'claude_statusline'" "claude_statusline" "$st_source"
 assert_eq "state observed_at matches the log row's" "1767261605" "$st_observed"
 
 section "a long bookkeeping tail still finds the assistant entry (byte window, not 20 lines)"

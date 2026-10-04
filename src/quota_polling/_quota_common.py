@@ -60,14 +60,13 @@ def append_poll_row(d_record: dict, data_file: Path, error_file: Path) -> None:
 def last_poll_row(data_file: Path, error_file: Path, sources: tuple[str, ...] | None = None) -> dict | None:
     """The newest row by `ts` across a poller's data file and error log -
     its last attempt, whichever way it went. `sources` limits it to rows
-    whose `source` (missing = "claude", the oldest rows) is listed; None
-    takes any row, push rows included."""
+    whose `source` is listed; None takes any row, push rows included."""
     l_rows = [
         d_row
         for path in (data_file, error_file)
         for d_row in tail_json_rows(path)
         if isinstance(d_row.get("ts"), (int, float))
-        and (sources is None or d_row.get("source", "claude") in sources)
+        and (sources is None or d_row.get("source") in sources)
     ]
     return max(l_rows, key=lambda d_row: d_row["ts"]) if l_rows else None
 

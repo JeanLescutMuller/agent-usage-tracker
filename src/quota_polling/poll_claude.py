@@ -34,7 +34,7 @@ right signal, not "did tokens move." A missing heartbeat file (statusline
 not installed, or never rendered) just means the heartbeat check always
 reports not-fresh, which degrades gracefully to the old flat 5-minute cadence.
 
-Note this poller's own `source: "claude"` rows are a fallback path now, not
+Note this poller's own `source: "claude_api"` rows are a fallback path now, not
 the primary one: ../../bin/ingest-claude-statusline.sh pushes a free
 `source: "claude_statusline"` reading on every real message, riding
 Claude Code's own in-memory rate_limits state - no network call, never
@@ -64,10 +64,10 @@ QUOTA_LOG_FILE = DATA_DIR / "claude" / "account.jsonl"  # account scope: the met
 ERROR_LOG_FILE = DATA_DIR.parent / "logs" / "claude-poll-errors.jsonl"
 
 # The "latest known quota" state file agent-statusline displays (README.md's
-# "Contract with agent-statusline"). Written here with source "API" via
-# _quota_common.write_state_if_newer, same format and same freshness rule
-# as ../../bin/ingest-claude-statusline.sh's "statusline" writes to this
-# same file.
+# "Contract with agent-statusline"). Written here with source "claude_api"
+# via _quota_common.write_state_if_newer, same format and same freshness
+# rule as ../../bin/ingest-claude-statusline.sh's "claude_statusline"
+# writes to this same file - the same names as the rows' `source`.
 STATE_FILE = Path.home() / "opt" / "agent-usage-tracker" / "state" / "quota" / "claude"
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
@@ -217,7 +217,7 @@ def _last_claude_log_row() -> dict | None:
     applies to claude_statusline rows within this file, so the filter stays).
     Since 2026-10-04 a failed attempt (the 429 carrying Retry-After) lives in
     ERROR_LOG_FILE, so both files are read and the newest row wins."""
-    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("claude",))
+    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("claude_api",))
 
 
 def _should_poll(now: float) -> bool:
@@ -257,7 +257,7 @@ def main() -> None:
     d_record = {
         "ts": int(time.time()),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": "claude",
+        "source": "claude_api",  # "claude" before 2026-10-04 (renamed in place by rename_sources.py)
         "api": d_api,
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
@@ -273,7 +273,7 @@ def main() -> None:
             _epoch(five_hour.get("resets_at")),
             round(seven_day.get("utilization") or 0),
             _epoch(seven_day.get("resets_at")),
-            "API",
+            "claude_api",
             d_record["ts"],
         )
 

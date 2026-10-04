@@ -147,7 +147,7 @@ what caused 429s during busy multi-session hours. As of the 2026-08-31
 merge, the statusline side pushes its own `source: "claude_statusline"`
 reading directly instead (see `AGENTS.md`'s "Quota tracking" summary at the
 parent README.md and the schema in this project's `AGENTS.md`) — this
-poller's `source: "claude"` rows are now a fallback for the gap that push
+poller's `source: "claude_api"` rows are now a fallback for the gap that push
 path can't cover, not the primary signal. Codex never needed an equivalent
 push: the data's already durable on disk via the local session file, so
 writing it *again* into `codex/account.jsonl` from the statusline
@@ -267,7 +267,7 @@ in `claude/account.jsonl`:
 {
   "ts": 1787736614,                       // epoch seconds
   "iso": "2026-08-26T09:30:14Z",
-  "source": "claude",
+  "source": "claude_api",
   "api": { /* full raw /api/oauth/usage response, or null on failure */ },
   // ^ 17 top-level keys. Besides five_hour/seven_day (each with
   //   utilization, resets_at, and always-null limit/used/remaining_dollars):
@@ -308,7 +308,7 @@ Codex rows, in `codex/account.jsonl` (since 2026-08-30):
 ```jsonc
 {
   "ts": 1788081319, "iso": "2026-08-30T09:15:19Z",
-  "source": "codex",
+  "source": "codex_app_server",
   "codex_rate_limits": {                  // raw account/rateLimits/read result, or null on failure
     "rateLimits": {
       "primary":   {"usedPercent": 0, "windowDurationMins": 300,   "resetsAt": 1788099318},

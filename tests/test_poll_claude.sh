@@ -58,26 +58,26 @@ print(poll_claude._should_poll(10000))
 
 section "watched (fresh heartbeat) -> poll every 120s, not every 60s tick"
 assert_eq "last poll 60s ago -> skip (a minute apart drew a 429 every other time)" "False" \
-    "$(should_poll 5 '{"ts":9940,"source":"claude","error":null}')"
+    "$(should_poll 5 '{"ts":9940,"source":"claude_api","error":null}')"
 assert_eq "last poll 119s ago (second tick, ts stamped after the request) -> poll" "True" \
-    "$(should_poll 5 '{"ts":9881,"source":"claude","error":null}')"
+    "$(should_poll 5 '{"ts":9881,"source":"claude_api","error":null}')"
 assert_eq "push rows in between don't count as polls" "True" \
-    "$(should_poll 5 '{"ts":9870,"source":"claude","error":null}
+    "$(should_poll 5 '{"ts":9870,"source":"claude_api","error":null}
 {"ts":9990,"source":"claude_statusline"}')"
 assert_eq "no poller row yet -> poll" "True" \
     "$(should_poll 5 '{"ts":9990,"source":"claude_statusline"}')"
 assert_eq "Retry-After still wins while watched, read from the error log" "False" \
-    "$(should_poll 5 '{"ts":9600,"source":"claude","error":null}' '{"ts":9700,"source":"claude","error":{"retry_after_s":600}}')"
+    "$(should_poll 5 '{"ts":9600,"source":"claude_api","error":null}' '{"ts":9700,"source":"claude_api","error":{"retry_after_s":600}}')"
 assert_eq "a failed attempt 60s ago counts as the last poll" "False" \
-    "$(should_poll 5 '{"ts":9800,"source":"claude","error":null}' '{"ts":9940,"source":"claude","error":{"stage":"http","status":429}}')"
+    "$(should_poll 5 '{"ts":9800,"source":"claude_api","error":null}' '{"ts":9940,"source":"claude_api","error":{"stage":"http","status":429}}')"
 
 section "idle (no heartbeat) -> unchanged ~5 min cadence"
 assert_eq "a failed attempt 200s ago holds off the idle poll" "False" \
-    "$(should_poll "" '{"ts":9000,"source":"claude","error":null}' '{"ts":9800,"source":"claude","error":{"stage":"network"}}')"
+    "$(should_poll "" '{"ts":9000,"source":"claude_api","error":null}' '{"ts":9800,"source":"claude_api","error":{"stage":"network"}}')"
 assert_eq "last row 200s ago -> skip" "False" \
-    "$(should_poll "" '{"ts":9800,"source":"claude","error":null}')"
+    "$(should_poll "" '{"ts":9800,"source":"claude_api","error":null}')"
 assert_eq "last row 300s ago -> poll" "True" \
-    "$(should_poll "" '{"ts":9700,"source":"claude","error":null}')"
+    "$(should_poll "" '{"ts":9700,"source":"claude_api","error":null}')"
 
 # poll_once <fetch_usage return expression> -> runs main() with the token
 # and request faked, against temp files; prints "<data lines> <error lines>".

@@ -183,7 +183,7 @@ def _last_codex_log_ts() -> int | None:
     split), but kept as a cheap defensive check against a stray/malformed
     row rather than trusting file identity alone. Since 2026-10-04 failed
     attempts live in ERROR_LOG_FILE, so both files are read."""
-    d_row = _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("codex",))
+    d_row = _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("codex_app_server",))
     return d_row["ts"] if d_row else None
 
 
@@ -235,7 +235,7 @@ def main() -> None:
     d_record = {
         "ts": int(time.time()),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "source": "codex",
+        "source": "codex_app_server",  # "codex" before 2026-10-04 (renamed in place by rename_sources.py)
         "codex_rate_limits": d_rate_limits,
         "codex_usage": d_usage,
         "error": d_error,  # None on success; why the reading is missing otherwise

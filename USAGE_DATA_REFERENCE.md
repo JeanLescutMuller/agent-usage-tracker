@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-04 (push dating and dedup, state-file source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
+*Last verified: 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
 
 ---
 
@@ -52,8 +52,8 @@ Two kinds of file in total, easy to conflate:
 | Writer | Scheduled by | Upstream source | Writes |
 |---|---|---|---|
 | **Claude push** — `bin/ingest-claude-statusline.sh` | Every Claude status-line render: agent-statusline's Claude provider pipes its raw stdin payload in | Statusline stdin (Sources §3.1) | `claude/account.jsonl` + `claude/<session-id>.jsonl` (both `source: "claude_statusline"`) + `state/quota/claude` (source `statusline`) |
-| **Claude poller** — `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick, via `poll_all.py` | `GET /api/oauth/usage` (Sources §3.5) | `claude/account.jsonl` (`source: "claude"`) + `state/quota/claude` (source `API`) |
-| **Codex poller** — `src/quota_polling/poll_codex.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | `codex/account.jsonl` (`source: "codex"`) |
+| **Claude poller** — `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick, via `poll_all.py` | `GET /api/oauth/usage` (Sources §3.5) | `claude/account.jsonl` (`source: "claude_api"`) + `state/quota/claude` (source `claude_api`) |
+| **Codex poller** — `src/quota_polling/poll_codex.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | `codex/account.jsonl` (`source: "codex_app_server"`) |
 | **Codex plan-history poller** — `src/quota_polling/poll_codex_plan_history.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | `codex/account.jsonl` (`source: "codex_plan_limit_history"`) + `state/poll/codex_plan_limit_history` (last attempt) |
 | **Telemetry receiver** — `src/telemetry/otlp_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `claude/<session-id>.jsonl` (`source: "claude_otel"`, §9) |
 | **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | `~/opt/agent-statusline/state/quota/codex` only, at most once per 60 s |
@@ -134,12 +134,12 @@ Session rows exist only from the 2026-09-29/30 deploys: rows written before carr
 
 **Headless `claude -p` writes no push rows and no session-file push rows** — it never renders a status line (verified 2026-09-30, §8). Its session file, if any, holds only telemetry rows (§9).
 
-### 2.2 Poller rows — `source: "claude"`
+### 2.2 Poller rows — `source: "claude_api"`
 
 12,848 rows (11%) **[verified]**.
 
 ```json
-{"ts": ..., "iso": ..., "source": "claude",
+{"ts": ..., "iso": ..., "source": "claude_api",
  "api": {"five_hour": {"utilization": 15, "resets_at": "2026-09-29T21:00:00.165686+00:00",
                        "limit_dollars": null, "used_dollars": null, "remaining_dollars": null, "locked_reason": null},
          "seven_day": {...}, "extra_usage": {...}, ...},
@@ -151,7 +151,7 @@ Session rows exist only from the 2026-09-29/30 deploys: rows written before carr
 - **The poller is unreliable: 8,516 of 12,848 attempts failed** (as of 2026-09-29, counted when failures were still rows here) — 6,239 SSL/network, 2,165 HTTP 429, 112 missing Keychain token **[verified]**. The push path does ~92% of the real work.
 - **Some failures before 2026-09-30 left no row.** `http.client.RemoteDisconnected` (the server closing the connection) is an `OSError`, not a `URLError`, so it escaped the poller's handlers: the run crashed and wrote nothing. 7 such crashes are in `logs/quota-poll.err`, the last on 2026-09-29 **[verified]**. Since the 2026-09-30 fix, any `OSError` is logged as a `network` error row (in the error log since 2026-10-04).
 - No `observed_at`: `ts` is the reading time.
-- Older shapes: rows before 2026-08-30 have no `source` key (treat as `"claude"`); rows before 2026-08-26 carry `token_deltas` / `baseline` instead of `api_headers`. Those token deltas were never from the API — the old poller computed them from transcripts, and they were dropped as redundant.
+- Older shapes: rows before 2026-08-30 have no `source` key (treat as `"claude_api"`; none were left in the live file on 2026-10-04); rows before 2026-08-26 carry `token_deltas` / `baseline` instead of `api_headers`. Those token deltas were never from the API — the old poller computed them from transcripts, and they were dropped as redundant.
 
 ---
 
@@ -159,10 +159,10 @@ Session rows exist only from the 2026-09-29/30 deploys: rows written before carr
 
 The continuation of the pre-2026-09-30 `data/codex-quota-history.jsonl` (13.4 MB, 4,006 lines over 24 days as of 2026-09-29, ~3,349 bytes/line **[verified]**), migrated **byte-identical**. Two writers, disambiguated by `source`. Every row is account-scope; there are no Codex session files.
 
-### 3.1 Poller rows — `source: "codex"`
+### 3.1 Poller rows — `source: "codex_app_server"`
 
 ```text
-ts, iso, source: "codex", error
+ts, iso, source: "codex_app_server", error
 codex_rate_limits.rateLimits.primary.usedPercent / .windowDurationMins (300)   / .resetsAt
 codex_rate_limits.rateLimits.secondary.usedPercent / .windowDurationMins (10080) / .resetsAt
 codex_rate_limits.rateLimits.planType = "plus", .credits, .rateLimitReachedType
@@ -209,7 +209,7 @@ Only **finished** windows appear, and only windows that had usage. Each fetch ov
 
 Not history; one line, overwritten; fields separated by the ASCII FS character (`\034`).
 
-`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Both Claude writers compare their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `statusline` (push) or `API` (poller), information only: agent-statusline reads the file whatever the source. Until 2026-10-04 it was `X` / `P`, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
+`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Both Claude writers compare their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `claude_statusline` (push) or `claude_api` (poller), the same names as the rows' `source`; information only: agent-statusline reads the file whatever the source. Until 2026-10-04 it was `X` / `P`, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
 
 `~/opt/agent-statusline/state/quota/codex` (agent-statusline's, listed for completeness) has **four** fields: `five_pct, five_reset, week_pct, week_reset`, with the resets as the TUI's display strings (e.g. `16:05`, `11:05 on 28 Sep`), not epochs, and no `source` or `observed_at`. It is written only by the Codex status line, at most once per 60 s, with freshness tracked in a sidecar `state/quota/codex.timestamp` file rather than by comparing readings. agent-statusline's `state/heartbeat/{claude,codex}` are touched on every render; this project's pollers read their mtime to tell a status line is live.
 
@@ -268,7 +268,7 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | Date | Change | Effect on the data |
 |---|---|---|
 | 2026-08-26 | Claude poller stops logging `token_deltas` / `baseline`, adds `api_headers` | Older rows have the old shape |
-| 2026-08-30 | `source` key added | Older rows have none; treat as `"claude"` |
+| 2026-08-30 | `source` key added | Older rows have none; treat as `"claude"` (`"claude_api"` since 2026-10-04) |
 | 2026-08-31 | Combined `data/quota-log.jsonl` split per provider; push path added | See `adhoc_quotas_analysis/AGENTS.md` "Naming history" |
 | 2026-09-29 | Push stops rounding the percent before logging | No practical effect: upstream values are whole (§5.1). Only matters if Anthropic ever sends fractions |
 | 2026-09-29 | Push adds `session_id` + `session_cost_usd` | Per-session spend over time, interactive sessions only |
@@ -283,6 +283,7 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | 2026-09-30 | Push token fields `session_input_tokens` / `session_output_tokens` removed before ever being deployed | They were mislabelled: the source field is context size, not a session total (Sources §3.1) |
 | **2026-10-04** | **Push dated by the last `assistant` entry, deduplicated per session.** `observed_at` comes from the last API response in the transcript's last 256 KB instead of the last timestamped entry of any type in its last 20 lines; no such entry → nothing written, state file included (it used to get *now*). Rows are appended only when they differ from this session's previous one (§1). State-file `source` renamed `X` → `statusline`, `P` → `API` | Push row density drops by ~99% (one row per API response per session instead of one per ~10 s render: session `bc36b32e`'s 12,163 rows held 27 distinct readings). Older push rows keep their duplicates and may be dated late (§5.2); history is not rewritten |
 | 2026-10-04 | Claude poller polls every 120 s instead of every 60 s tick while a status line is on screen | At 60 s the endpoint refused every other request with a 429 and `Retry-After: 0` (358 of 778 polls on 2026-10-03/04), so poller error rows should drop sharply while the number of successful readings stays about the same |
+| **2026-10-04** | **Poller `source` values say what they read**: `"claude"` → `"claude_api"` (`GET /api/oauth/usage`), `"codex"` → `"codex_app_server"` (`codex app-server` JSON-RPC), and the latest-reading file's source → `claude_api` / `claude_statusline`. Existing rows renamed in place by `adhoc_quotas_analysis/rename_sources.py` (only the `source` value changes; originals in `data/_archive/*.pre-rename`) | Readers match the new names only: no row in `data/` or the error logs carries `"claude"` or `"codex"` any more. `claude_statusline` and `codex_plan_limit_history` are unchanged |
 | **2026-10-04** | **Failed poll attempts leave `data/`.** All three pollers write a failed attempt to `logs/claude-poll-errors.jsonl` / `logs/codex-poll-errors.jsonl` instead of `account.jsonl`. The existing error rows were moved there, byte-identical, by `adhoc_quotas_analysis/split_errors.py`; the original account files are in `data/_archive/` | Readers of `data/` no longer filter `error != null`: every row there is a reading. Row counts in `data/` drop accordingly (Claude poller rows by about two thirds) |
 
 ---

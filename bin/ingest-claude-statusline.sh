@@ -26,7 +26,7 @@
 #      last one this session wrote (dedup below), so re-renders of the same
 #      reading add nothing.
 #   2. Update state/quota/claude (write_quota_if_newer below), source
-#      "statusline", only if this reading is actually newer than whatever's
+#      "claude_statusline" (the rows' own source name), only if this reading is actually newer than whatever's
 #      already there, so a slow/delayed render or an idle session can't
 #      regress a fresher poll or another session's more recent push.
 #
@@ -225,5 +225,5 @@ if [ "$keys_changed" = true ] && [ -n "$key_file" ]; then
     find "${key_file%/*}" -type f -mtime +30 -delete 2>/dev/null
 fi
 
-write_quota_if_newer "$runtime_dir/state/quota/claude" statusline "$observed_at"
+write_quota_if_newer "$runtime_dir/state/quota/claude" claude_statusline "$observed_at"
 exit 0
