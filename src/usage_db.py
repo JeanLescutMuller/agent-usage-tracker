@@ -192,6 +192,12 @@ PRICES = {
     "claude-sonnet-5": (2, 10, .1),
     "claude-sonnet-5-5": (2, 10, .1),
     "claude-haiku-4-5-20251001": (1, 5, .1),
+    # Codex: no dollar figure exists upstream for a subscription. This is the
+    # price ccusage 20.0.26 applies, which reproduces its monthly totals
+    # exactly (fitted 2026-10-08). Other Codex models have no verified price:
+    # their usd stays NULL. adhoc_quotas_analysis/CONCLUSIONS.md uses $5/$30
+    # for gpt-5.6-sol instead; see TODO.md.
+    "gpt-5.6-sol": (4, 20, .1),
 }
 
 # Key names that mean "a quota percent": never allowed in sessions_usages.db

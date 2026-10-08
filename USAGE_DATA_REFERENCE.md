@@ -50,7 +50,7 @@ The two scopes join on **`ts`** (a time join); no field is duplicated across the
 
 `observed_by_session` on an account row names the session that was rendering when the reading was taken — a free liveness signal — **not** the session whose usage it is.
 
-Codex has no sessions database yet: its per-turn tokens stay in Codex's own `~/.codex/sessions/` files (Sources §4.1); reading them is step 7 of `TODO.md`'s build plan.
+Codex has a sessions database since 2026-10-08 with one table in use, `requests`: one row per turn, read from Codex's own `~/.codex/sessions/` files (§10). Codex sends no telemetry and has no status-line session snapshot.
 
 Besides the databases, one small file: **`state/quota/claude`**, the latest Claude reading, read live by agent-statusline, auto-apply and smart-orchestrator (§4).
 
@@ -63,7 +63,7 @@ Besides the databases, one small file: **`state/quota/claude`**, the latest Clau
 | **Codex poller** — `src/codex_quota_api_poller.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | codex `account_quotas` (`source: "codex_app_server"`) or `poll_errors` |
 | **Codex plan-history poller** — `src/codex_plan_history_poller.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | codex `account_quotas` (`source: "codex_plan_limit_history"`) or `poll_errors` |
 | **Telemetry receiver** — `src/telemetry_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `telemetry` (`source: "claude_otel"`, §9) |
-| **Transcript reader** — `src/transcript_reader.py` | Its own LaunchAgent, every 5 min | Claude Code transcripts `~/.claude/projects/**/*.jsonl` (Sources §3.4) | `requests` + `scans` (§10) |
+| **Transcript reader** — `src/transcript_reader.py` | Its own LaunchAgent, every 5 min | Claude Code transcripts `~/.claude/projects/**/*.jsonl` (Sources §3.4) and Codex session files `~/.codex/{sessions,archived_sessions}/**/*.jsonl` (Sources §4.1) | `requests` + `scans` in each agent's sessions database (§10) |
 | **Push** — `src/push_to_central.py` | Its own scheduled job on every machine, every 5 min | This machine's databases (new rows only) | Nothing locally except `state/push/watermarks.json`; sends rows to the VM (§11) |
 | **Central receiver** — `src/receive_from_machine.py` | On the VM, over ssh, per push | Another machine's pushed rows | Both gates, into `central/<machine>/data/<agent>/` (§11) |
 | **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | Displays its own stdin reading; writes nothing of ours |
@@ -300,6 +300,7 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 | **2026-10-07** | **Claude plan upgraded from Pro to Max 5x** (about 16:51Z). Not a change in what is captured: the same fields, sources and files. The 7-day meter dropped from 60% to 0% mid-window (`claude_api` row at 2026-10-07T16:51:04Z; `seven_day` still resets 2026-10-12) | **A Claude percent after this point is not comparable to one before it**: 1% now stands for about 5× as many tokens. Split any percent series, budget or %-to-tokens conversion at 2026-10-07T16:51Z. `adhoc_quotas_analysis/CONCLUSIONS.md` numbers are Pro-only. Tokens and USD are unaffected. `~/.claude.json` still said `organizationType: claude_pro` right after the upgrade |
 | **2026-10-08** | **JSONL files → SQLite databases, one gate per database.** `data/<agent>/account.jsonl` and `logs/<agent>-poll-errors.jsonl` → `data/<agent>/account_quotas.db` (`account_quotas`, `poll_errors`); `data/claude/<session-id>.jsonl` → `data/claude/sessions_usages.db` (`session_snapshots`, `telemetry`). Migrated by `adhoc_quotas_analysis/migrate_to_sqlite.py` through the gates: 228,838 lines, 228,544 distinct, every distinct line found again by its hash, 0 rejected, a second run inserted nothing; originals in `data/_archive/pre-sqlite-20261008T090432Z/` plus a `.tar.gz` of `data/`, `logs/`, `state/`. New: the transcript reader (`requests`, `scans`; backfill 416 files, 969 MB, 18,151 requests in 12.4 s) and the views `latest`, `usage_requests`, `usage_5m`. Pollers renamed (`claude_quota_api_poller.py`, `codex_quota_api_poller.py`, `codex_plan_history_poller.py`, `run_pollers.py`), the receiver to `telemetry_receiver.py`; `state/ingest/` and `state/poll/` dropped (the databases answer those questions) | Every row is still there, its JSON verbatim in `raw`; readers switch from files to `SELECT raw ... ORDER BY rowid` (as `adhoc_quotas_analysis/account_rows.py` and agent-quota-maximizer's `s1_ingest.py` do). `quota_model.py` printed the same output from the databases as from the JSONL. The 294 exact duplicate lines collapse to one row each. `ts` is now when a reading was true (`observed_at` for push rows); the old `ts` is `written_ts`. `state/quota/claude` is unchanged and written by the account gate |
 | **2026-10-08** | **Central store on the VM.** Every machine pushes its new rows every 5 min (`push_to_central.py`); the VM stores them through the gates in `central/<machine>/data/<agent>/` (`receive_from_machine.py`). The tracker also runs on the VM (systemd `--user`): its transcripts, telemetry and Claude poller; the Codex pollers skip there (no Codex). First push from the Mac: 247,283 rows in 58 s; per-table counts identical on both sides | New `central/` tree on the VM. `account_quotas` copies are history as sent (no redundant-reading dedup). The VM's own Claude poller needs Claude Code logged in on the VM (its credentials were empty on 2026-10-08) |
+| **2026-10-08** | **Codex turns in `data/codex/sessions_usages.db`.** The transcript reader also reads `~/.codex/sessions` and `archived_sessions`: one `requests` row per `token_count` event (request_id `<thread>:<running total>`), folder and model from the session, entrypoint from `session_meta.source`. Backfill: 77 files, 2,871 turns | Monthly tokens per model identical to ccusage 20.0.26; `usd` only for `gpt-5.6-sol` ($4/$20, cached 0.1x: ccusage's price, which reproduces its totals), NULL for other Codex models |
 
 ---
 
@@ -372,7 +373,7 @@ Attribution attributes include the account's `user.email`; the file stays local,
 
 ---
 
-## 10. Transcript requests: `requests` in `data/claude/sessions_usages.db`, and the views
+## 10. Transcript requests: `requests` in `data/<agent>/sessions_usages.db`, and the views
 
 One row per Claude API request found in a transcript (`~/.claude/projects/**/*.jsonl`, subagents included), from 2026-10-08, back to the oldest transcript kept. Written through the sessions gate by `src/transcript_reader.py`, every 5 minutes. No `raw`: the transcripts are the raw material, and the table can be rebuilt from them.
 
@@ -385,6 +386,8 @@ One row per Claude API request found in a transcript (`~/.claude/projects/**/*.j
 | `model` | `message.model` |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | From the request's line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output; the first line undercounts output about 2×) |
 | `usd` | List price from `usage_db.PRICES`; NULL for a model not in the table |
+
+**Codex rows** (`data/codex/sessions_usages.db`, since 2026-10-08) use the same columns: one row per turn (`token_count` event), `request_id` = `<thread id>:<running total>` (a repeated event or an archived copy is skipped), `session_id` = the thread id, `folder` and `model` from `session_meta` / the latest `turn_context`, `entrypoint` = `session_meta.source` (`cli`, `vscode`, `exec`; `subagent` for a subagent thread), `input_tokens` without the cached part, `cache_read_tokens` = `cached_input_tokens`, `output_tokens` including reasoning. A turn is stored as soon as its event is written (no 15-min wait). `usd` is set only for `gpt-5.6-sol`. Note `interactive` in `usage_5m` is `entrypoint = 'cli'`, so Codex's VS Code threads count as not interactive.
 
 A request is stored once it is complete: when its first line is ≥ 15 min old (its lines span ≤ 292 s, measured 2026-10-08). Each run adds a `scans` row; its `complete_through_ts` (run time − 15 min) means every request that started earlier is in the table.
 

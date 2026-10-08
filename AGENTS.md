@@ -21,7 +21,7 @@ agent-usage-tracker/
 │   ├── claude_quota_api_poller.py / codex_quota_api_poller.py / codex_plan_history_poller.py  # collectors: meter pollers
 │   ├── run_pollers.py                           # the pollers' LaunchAgent entry point, runs each as a subprocess
 │   ├── telemetry_receiver.py                    # collector: local OTLP receiver (KeepAlive LaunchAgent)
-│   ├── transcript_reader.py                     # collector: ~/.claude/projects transcripts -> requests, every 5 min
+│   ├── transcript_reader.py                     # collector: Claude transcripts + Codex session files -> requests, every 5 min
 │   ├── push_to_central.py                       # every machine: new rows -> the VM over ssh, every 5 min (reads only)
 │   ├── receive_from_machine.py                  # collector on the VM: pushed rows -> both gates, into central/<machine>/
 │   ├── merge_claude_env.py + claude_telemetry_env.json  # run from the repo: owns the telemetry keys in ~/.claude/settings.json's `env`

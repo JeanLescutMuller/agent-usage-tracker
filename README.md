@@ -47,7 +47,7 @@ transcript_reader.py (every 5 min) ──────┘
 | `codex_quota_api_poller.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
 | `codex_plan_history_poller.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
 | `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
-| `transcript_reader.py` | Its own LaunchAgent, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl` | Sessions gate (`requests` table): one row per API request once it is 15 min old |
+| `transcript_reader.py` | Its own LaunchAgent, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Sessions gate (`requests` table of each agent): one row per Claude API request once it is 15 min old, one per Codex turn |
 | `receive_from_machine.py` | On the VM, run over ssh by another machine's `push_to_central.py` | That machine's new rows | Both gates, into `central/<machine>/` (see "Central store on the VM") |
 
 Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
@@ -98,7 +98,9 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
     │   ├── claude/
     │   │   ├── account_quotas.db         account scope: Claude readings (quota percent), failed poll attempts
     │   │   └── sessions_usages.db        session scope: requests, telemetry events, session snapshots (never a percent)
-    │   ├── codex/account_quotas.db       account scope: Codex readings and plan-limit history
+    │   ├── codex/
+    │   │   ├── account_quotas.db         account scope: Codex readings and plan-limit history
+    │   │   └── sessions_usages.db        session scope: Codex turns (requests)
     │   └── _archive/                     originals kept by one-time migrations, incl. pre-sqlite-20261008T090432Z/ (every JSONL file) and its .tar.gz
     ├── state/
     │   ├── quota/claude                  latest Claude reading (see the contract above)

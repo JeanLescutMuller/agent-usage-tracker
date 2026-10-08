@@ -11,7 +11,8 @@ trap 'rm -rf "$TMP"' EXIT
 RT="$TMP/rt"
 PROJ="$TMP/projects"
 SDB="$RT/data/claude/sessions_usages.db"
-mkdir -p "$PROJ/-Users-x-dev-app" "$PROJ/-Users-x-opt-job"
+CODEX="$TMP/codex"
+mkdir -p "$PROJ/-Users-x-dev-app" "$PROJ/-Users-x-opt-job" "$CODEX/sessions/2026/10/08" "$CODEX/archived_sessions"
 
 q() {
     python3 -c 'import sqlite3, sys
@@ -20,7 +21,7 @@ for r in sqlite3.connect(sys.argv[1]).execute(sys.argv[2]):
 }
 # read_at <epoch> - one transcript_reader run with the clock at <epoch>.
 read_at() {
-    AGENT_USAGE_TRACKER_RUNTIME="$RT" AGENT_USAGE_TRACKER_TRANSCRIPTS="$PROJ" python3 -c "
+    AGENT_USAGE_TRACKER_RUNTIME="$RT" AGENT_USAGE_TRACKER_TRANSCRIPTS="$PROJ" AGENT_USAGE_TRACKER_CODEX_SESSIONS="$CODEX/sessions:$CODEX/archived_sessions" python3 -c "
 import sys, time
 sys.path.insert(0, '$REPO_ROOT/src')
 time.time = lambda: $1
@@ -86,5 +87,40 @@ line 2026-10-08T12:40:00.000Z req_f 1 > "$PROJ/-Users-x-dev-app/s3.jsonl"
 sed -i '' 's/claude-opus-5/claude-future-9/' "$PROJ/-Users-x-dev-app/s3.jsonl"
 read_at $((T0 + 5000)) >/dev/null
 assert_eq "usd NULL" "claude-future-9	" "$(q "SELECT model, usd FROM requests WHERE request_id = 'req_f'")"
+
+section "Codex: one row per turn, repeats skipped, cached input split out"
+CDB="$RT/data/codex/sessions_usages.db"
+cq() { python3 -c 'import sqlite3, sys
+for r in sqlite3.connect(sys.argv[1]).execute(sys.argv[2]):
+    print("\t".join("" if v is None else str(v) for v in r))' "$CDB" "$1"; }
+tok() { # time total input cached output
+    printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":%s},"last_token_usage":{"input_tokens":%s,"cached_input_tokens":%s,"output_tokens":%s}}}}\n' "$@"
+}
+CX="$CODEX/sessions/2026/10/08/rollout-a.jsonl"
+{
+    printf '%s\n' '{"timestamp":"2026-10-08T12:00:00.000Z","type":"session_meta","payload":{"id":"thr-1","cwd":"/Users/x/dev/app","source":"cli"}}'
+    printf '%s\n' '{"timestamp":"2026-10-08T12:00:01.000Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","cwd":"/Users/x/dev/app"}}'
+    tok 2026-10-08T12:00:05.000Z 1100 1000 800 100
+    tok 2026-10-08T12:00:06.000Z 1100 1000 800 100
+} > "$CX"
+read_at $((T0 + 6000)) >/dev/null
+assert_eq "one turn (the repeated event is skipped)" "1" "$(cq "SELECT COUNT(*) FROM requests")"
+assert_eq "id, session, folder, entrypoint, model" "thr-1:1100	thr-1	/Users/x/dev/app	cli	gpt-5.6-sol" \
+    "$(cq "SELECT request_id, session_id, folder, entrypoint, model FROM requests")"
+assert_eq "input without the cached part; cached as cache reads" "200	800	100" "$(cq "SELECT input_tokens, cache_read_tokens, output_tokens FROM requests")"
+# gpt-5.6-sol at $4 / $20, cached 0.1x: 200x4 + 100x20 + 800x0.4 = 3120 / 1e6
+assert_eq "usd" "0.00312" "$(cq "SELECT ROUND(usd, 6) FROM requests")"
+assert_contains "the run reports Codex too" "$(read_at $((T0 + 6100)))" "codex: files read 0"
+
+section "Codex: a later run continues mid-file with the session's context; an archived copy adds nothing"
+printf '%s\n' '{"timestamp":"2026-10-08T12:10:00.000Z","type":"turn_context","payload":{"model":"gpt-6-luna","cwd":"/Users/x/dev/app"}}' >> "$CX"
+tok 2026-10-08T12:10:05.000Z 1500 300 0 100 >> "$CX"
+read_at $((T0 + 6200)) >/dev/null
+assert_eq "second turn, same session and folder, new model, no verified price" "thr-1	/Users/x/dev/app	gpt-6-luna	" \
+    "$(cq "SELECT session_id, folder, model, usd FROM requests WHERE request_id = 'thr-1:1500'")"
+mv "$CX" "$CODEX/archived_sessions/"
+read_at $((T0 + 6300)) >/dev/null
+assert_eq "still two turns" "2" "$(cq "SELECT COUNT(*) FROM requests")"
+assert_eq "Claude's database untouched by Codex" "0" "$(q "SELECT COUNT(*) FROM requests WHERE model LIKE 'gpt%'")"
 
 harness_summary

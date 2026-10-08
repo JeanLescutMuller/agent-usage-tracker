@@ -227,6 +227,7 @@ Tested on an interactive session too **[tested 2026-09-30]**: four `api_request`
 - `total_token_usage` is cumulative for the thread and repeats unchanged when nothing happened — **skip consecutive repeats**. `last_token_usage` is that turn alone.
 - `used_percent` is a float in the core protocol **[source]** but whole-valued in all 4,952 readings **[verified]**.
 - No model per turn in `token_count`, no cost. The model comes from the preceding `turn_context` record's `payload.model`; ccusage reports `codex-auto-review` as `gpt-5.6-luna`.
+- Per turn, `last_token_usage` is exact: one row per event whose running `total_tokens` is new (repeats share it) reproduces ccusage's monthly totals exactly; `transcript_reader.py` stores Codex this way **[verified 2026-10-08]**.
 - `total_token_usage` can **reset** within a file (3 times by 2026-10-07): a delta from the previous event goes negative. Use that event's `last_token_usage` instead. With this, monthly tokens per model match ccusage 20.0.26 exactly for 2026-08 → 2026-10 **[verified 2026-10-07]**, `adhoc_quotas_analysis/verify_token_costs.py`.
 - Our own runs are identified by `session_meta.cwd`, set with `codex exec -C <dir>` **[verified]**.
 
