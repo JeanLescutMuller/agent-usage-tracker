@@ -29,14 +29,15 @@ bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags an
 Each database has one **gate**, the only code that writes it: it checks every row (types, scope rule), skips repeats, and stores the row's JSON verbatim in `raw`. **Collectors** read a source and hand rows to a gate; they never open a database for writing (`tests/test_repo_hygiene.sh` enforces it).
 
 ```
-COLLECTORS (src/)                          GATES (src/)                  DATABASES (data/<agent>/)
-statusline_payload_reader.py ─quota──────┐
-claude_quota_api_poller.py ──────────────┤
+COLLECTORS (src/)                           GATES (src/)               DATABASES (data/<agent>/)
+claude_quota_api_poller.py ──────────────┐
 codex_quota_api_poller.py ───────────────┤
-codex_plan_history_poller.py ────────────┴▶ ingest_account_quota.py ─▶ account_quotas.db  (+ state/quota/claude)
-statusline_payload_reader.py ─session────┐
-telemetry_receiver.py ───────────────────┤
-transcript_reader.py ────────────────────┴▶ ingest_session_usage.py ─▶ sessions_usages.db
+codex_plan_history_poller.py ────────────┼▶ ingest_account_quota.py ─▶ account_quotas.db  (+ state/quota/claude, view latest)
+                               ┌─quota───┘
+statusline_payload_reader.py ──┤
+                               └─session─┐
+telemetry_receiver.py ───────────────────┼▶ ingest_session_usage.py ─▶ sessions_usages.db (views usage_requests, usage_5m)
+transcript_reader.py (every 5 min) ──────┘
 ```
 
 | Collector | Runs | Source | Hands to |
