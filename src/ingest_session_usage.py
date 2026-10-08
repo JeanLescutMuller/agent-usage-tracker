@@ -123,8 +123,13 @@ def add_requests(db, l_requests: list[dict]) -> int:
     return n
 
 
-def add_scan(db, ts: int, complete_through_ts: int, requests_added: int) -> None:
+def add_scan(db, ts: int, complete_through_ts: int, requests_added: int) -> str:
+    """One transcript-reader run. The same run sent twice (a re-sent push) is
+    stored once."""
+    if db.execute("SELECT 1 FROM scans WHERE ts = ? AND complete_through_ts = ?", (ts, complete_through_ts)).fetchone():
+        return "duplicate"
     db.execute("INSERT INTO scans VALUES (?,?,?,?)", (ts, usage_db.iso(ts), complete_through_ts, requests_added))
+    return "inserted"
 
 
 def main() -> None:

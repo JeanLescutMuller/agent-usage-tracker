@@ -53,7 +53,7 @@ appends="$(grep -nE 'O_APPEND|open\([^)]*"a"' "$REPO_ROOT"/src/*.py "$REPO_ROOT"
 assert_eq "no collector appends to a data file" "" "$appends"
 gate_calls="$(grep -lE 'ingest_account_quota\.add_row|ingest_session_usage\.add_' "$REPO_ROOT"/src/*.py | xargs -n1 basename | sort | paste -sd ' ' -)"
 assert_eq "the collectors that hand rows to a gate" \
-    "claude_quota_api_poller.py codex_plan_history_poller.py codex_quota_api_poller.py statusline_payload_reader.py telemetry_receiver.py transcript_reader.py" \
+    "claude_quota_api_poller.py codex_plan_history_poller.py codex_quota_api_poller.py receive_from_machine.py statusline_payload_reader.py telemetry_receiver.py transcript_reader.py" \
     "$gate_calls"
 
 harness_summary

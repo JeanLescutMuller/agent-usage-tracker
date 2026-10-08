@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-08 (move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
+*Last verified: 2026-10-08 (central store on the VM: first push, per-table counts identical; move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
 
 ---
 
@@ -64,6 +64,8 @@ Besides the databases, one small file: **`state/quota/claude`**, the latest Clau
 | **Codex plan-history poller** — `src/codex_plan_history_poller.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | codex `account_quotas` (`source: "codex_plan_limit_history"`) or `poll_errors` |
 | **Telemetry receiver** — `src/telemetry_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `telemetry` (`source: "claude_otel"`, §9) |
 | **Transcript reader** — `src/transcript_reader.py` | Its own LaunchAgent, every 5 min | Claude Code transcripts `~/.claude/projects/**/*.jsonl` (Sources §3.4) | `requests` + `scans` (§10) |
+| **Push** — `src/push_to_central.py` | Its own scheduled job on every machine, every 5 min | This machine's databases (new rows only) | Nothing locally except `state/push/watermarks.json`; sends rows to the VM (§11) |
+| **Central receiver** — `src/receive_from_machine.py` | On the VM, over ssh, per push | Another machine's pushed rows | Both gates, into `central/<machine>/data/<agent>/` (§11) |
 | **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | Displays its own stdin reading; writes nothing of ours |
 
 ### 1.2 What each writer captures, by unit
@@ -297,6 +299,7 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 | **2026-10-04** | **Failed poll attempts leave `data/`.** All three pollers write a failed attempt to `logs/claude-poll-errors.jsonl` / `logs/codex-poll-errors.jsonl` instead of `account.jsonl`. The existing error rows were moved there, byte-identical, by `adhoc_quotas_analysis/split_errors.py`; the original account files are in `data/_archive/` | Readers of `data/` no longer filter `error != null`: every row there is a reading. Row counts in `data/` drop accordingly (Claude poller rows by about two thirds) |
 | **2026-10-07** | **Claude plan upgraded from Pro to Max 5x** (about 16:51Z). Not a change in what is captured: the same fields, sources and files. The 7-day meter dropped from 60% to 0% mid-window (`claude_api` row at 2026-10-07T16:51:04Z; `seven_day` still resets 2026-10-12) | **A Claude percent after this point is not comparable to one before it**: 1% now stands for about 5× as many tokens. Split any percent series, budget or %-to-tokens conversion at 2026-10-07T16:51Z. `adhoc_quotas_analysis/CONCLUSIONS.md` numbers are Pro-only. Tokens and USD are unaffected. `~/.claude.json` still said `organizationType: claude_pro` right after the upgrade |
 | **2026-10-08** | **JSONL files → SQLite databases, one gate per database.** `data/<agent>/account.jsonl` and `logs/<agent>-poll-errors.jsonl` → `data/<agent>/account_quotas.db` (`account_quotas`, `poll_errors`); `data/claude/<session-id>.jsonl` → `data/claude/sessions_usages.db` (`session_snapshots`, `telemetry`). Migrated by `adhoc_quotas_analysis/migrate_to_sqlite.py` through the gates: 228,838 lines, 228,544 distinct, every distinct line found again by its hash, 0 rejected, a second run inserted nothing; originals in `data/_archive/pre-sqlite-20261008T090432Z/` plus a `.tar.gz` of `data/`, `logs/`, `state/`. New: the transcript reader (`requests`, `scans`; backfill 416 files, 969 MB, 18,151 requests in 12.4 s) and the views `latest`, `usage_requests`, `usage_5m`. Pollers renamed (`claude_quota_api_poller.py`, `codex_quota_api_poller.py`, `codex_plan_history_poller.py`, `run_pollers.py`), the receiver to `telemetry_receiver.py`; `state/ingest/` and `state/poll/` dropped (the databases answer those questions) | Every row is still there, its JSON verbatim in `raw`; readers switch from files to `SELECT raw ... ORDER BY rowid` (as `adhoc_quotas_analysis/account_rows.py` and agent-quota-maximizer's `s1_ingest.py` do). `quota_model.py` printed the same output from the databases as from the JSONL. The 294 exact duplicate lines collapse to one row each. `ts` is now when a reading was true (`observed_at` for push rows); the old `ts` is `written_ts`. `state/quota/claude` is unchanged and written by the account gate |
+| **2026-10-08** | **Central store on the VM.** Every machine pushes its new rows every 5 min (`push_to_central.py`); the VM stores them through the gates in `central/<machine>/data/<agent>/` (`receive_from_machine.py`). The tracker also runs on the VM (systemd `--user`): its transcripts, telemetry and Claude poller; the Codex pollers skip there (no Codex). First push from the Mac: 247,283 rows in 58 s; per-table counts identical on both sides | New `central/` tree on the VM. `account_quotas` copies are history as sent (no redundant-reading dedup). The VM's own Claude poller needs Claude Code logged in on the VM (its credentials were empty on 2026-10-08) |
 
 ---
 
@@ -390,4 +393,24 @@ A request is stored once it is complete: when its first line is ≥ 15 min old (
 | `latest` (account database) | — | The freshest reading by `ts`, whatever wrote it |
 | `usage_requests` | API request, once | Transcript requests with `usd` from telemetry's `cost_usd` when present (`usd_from = 'telemetry'`), else the price table; plus the requests only telemetry has (`seen_in = 'telemetry'`), placed in their session's folder |
 | `usage_5m` | 5-minute slot × folder × `interactive` | `requests`, `usd` and token sums; `final` = the slot ended before the last scan's `complete_through_ts` |
+
+---
+
+## 11. The central store on the VM `H-Frank-1`
+
+```
+~/opt/agent-usage-tracker/central/
+├── chan-lescut-macbook-pro-1/data/{claude,codex}/{account_quotas,sessions_usages}.db
+└── H-Frank-1/data/claude/{account_quotas,sessions_usages}.db
+```
+
+One folder per machine (its short hostname), each a full copy of that machine's databases, with the same tables and views (`latest`, `usage_requests`, `usage_5m`). Written only by `receive_from_machine.py` through the gates, from the rows each machine's `push_to_central.py` sends every 5 minutes. The VM's own data reaches `central/H-Frank-1/` the same way, without ssh.
+
+| Property | Detail |
+|---|---|
+| Freshness | At most about 5 min behind each machine while it is online; a machine that is asleep or offline catches up on its next push. Per-folder $ adds the transcript reader's 15 min |
+| Completeness | Every row of every table, as written on its machine (history as sent: no redundant-reading dedup). A re-sent row is a no-op |
+| Not copied | `state/quota/claude` and the other state files |
+| Reading across machines | Attach the databases you need (`ATTACH '.../central/<machine>/data/claude/sessions_usages.db'`) and union their views; open with `PRAGMA query_only = ON` (§1) |
+| Quota on the VM | Account-wide, so any machine's readings will do: `latest` in each copy. The VM's own Claude poller works only while Claude Code is logged in there |
 

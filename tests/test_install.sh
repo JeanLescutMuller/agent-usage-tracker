@@ -47,6 +47,9 @@ assert_contains "transcript reader plist runs every 5 min" \
     "$(cat "$RT/com.jeanlescut.agent-usage-tracker.transcripts.plist")" "<integer>300</integer>"
 assert_eq "transcript reader plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.transcripts.plist" \
     "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.transcripts.plist")"
+assert_eq "push plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.push.plist" \
+    "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.push.plist")"
+assert_file_missing "no systemd units on macOS" "$th_home/.config/systemd"
 assert_eq "telemetry env vars merged into ~/.claude/settings.json" \
     "$(jq -cS . "$REPO_ROOT/src/claude_telemetry_env.json")" "$(jq -cS .env "$th_home/.claude/settings.json")"
 assert_file_missing "nothing of agent-statusline's is created" "$th_home/opt/agent-statusline"
@@ -87,7 +90,7 @@ th_home="$(new_home)"
 run_script install.sh "$th_home"
 run_script uninstall.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
-for label in com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.transcripts; do
+for label in com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.transcripts com.jeanlescut.agent-usage-tracker.push; do
     assert_file_missing "$label symlink removed" "$th_home/Library/LaunchAgents/$label.plist"
 done
 assert_file_missing "the whole runtime dir is gone when data/ was never populated" "$th_home/opt/agent-usage-tracker"
@@ -113,6 +116,31 @@ section "uninstalling an already-clean machine is a harmless no-op"
 th_home="$(new_home)"
 run_script uninstall.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
+rm -rf "$th_home"
+
+section "Linux (the VM): systemd --user units instead of LaunchAgents"
+th_home="$(new_home)"
+RT="$th_home/opt/agent-usage-tracker"
+UNITS="$th_home/.config/systemd/user"
+TH_OUT="$(HOME="$th_home" AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1 AGENT_USAGE_TRACKER_OS=Linux bash "$REPO_ROOT/install.sh" 2>&1)"
+assert_status "exits 0" 0 $?
+assert_file_missing "no LaunchAgents" "$th_home/Library/LaunchAgents"
+for unit in com.jeanlescut.agent-usage-tracker.service com.jeanlescut.agent-usage-tracker.timer \
+    com.jeanlescut.agent-usage-tracker.otel.service \
+    com.jeanlescut.agent-usage-tracker.transcripts.service com.jeanlescut.agent-usage-tracker.transcripts.timer \
+    com.jeanlescut.agent-usage-tracker.push.service com.jeanlescut.agent-usage-tracker.push.timer; do
+    assert_eq "$unit: real file in the runtime, symlink in ~/.config/systemd/user" "$RT/$unit" "$(readlink "$UNITS/$unit")"
+done
+assert_contains "service runs the deployed script with this machine's python" \
+    "$(cat "$RT/com.jeanlescut.agent-usage-tracker.push.service")" "ExecStart=$(command -v python3) $RT/src/push_to_central.py"
+assert_not_contains "placeholders all rendered" "$(cat "$RT"/*.service "$RT"/*.timer)" "__"
+assert_contains "the receiver restarts if it exits" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.otel.service")" "Restart=always"
+assert_contains "the pollers tick every 60s" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.timer")" "OnUnitActiveSec=60s"
+mkdir -p "$RT/central/some-mac/data/claude" && printf 'db' > "$RT/central/some-mac/data/claude/account_quotas.db"
+TH_OUT="$(HOME="$th_home" AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1 AGENT_USAGE_TRACKER_OS=Linux bash "$REPO_ROOT/uninstall.sh" 2>&1)"
+assert_eq "uninstall removes the unit symlinks" "" "$(ls "$UNITS" 2>/dev/null)"
+assert_file_exists "central/ survives (every machine's pushed history)" "$RT/central/some-mac/data/claude/account_quotas.db"
+assert_not_contains "central/ is not an orphan" "$TH_OUT" "orphan files"
 rm -rf "$th_home"
 
 harness_summary

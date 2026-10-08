@@ -1,0 +1,16 @@
+# Rendered by install.sh (__PYTHON3__, __RUNTIME__) into ~/opt/agent-usage-tracker/;
+# ~/.config/systemd/user/ holds a symlink to it. Linux counterpart of the
+# LaunchAgent of the same name in ../launchd/.
+[Unit]
+Description=agent-usage-tracker: telemetry receiver on 127.0.0.1:4318
+
+[Service]
+Type=simple
+ExecStart=__PYTHON3__ __RUNTIME__/src/telemetry_receiver.py
+StandardOutput=append:__RUNTIME__/logs/otel-receiver.log
+StandardError=append:__RUNTIME__/logs/otel-receiver.err
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

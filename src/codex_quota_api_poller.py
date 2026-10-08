@@ -209,6 +209,10 @@ def _codex_session_recently_active(now: float) -> bool:
 
 
 def main() -> None:
+    # A machine without Codex (the VM) is not a failure to record every tick.
+    if not Path(CODEX_BIN).exists():
+        print(f"skip: no codex binary ({CODEX_BIN})")
+        return
 
     now = time.time()
     if _codex_session_recently_active(now):

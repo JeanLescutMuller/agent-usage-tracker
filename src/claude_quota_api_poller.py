@@ -47,6 +47,7 @@ codex_quota_api_poller.py).
 """
 import json
 import subprocess
+import sys
 import time
 import urllib.request
 import urllib.error
@@ -57,6 +58,8 @@ import usage_db
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
+# Where Claude Code keeps the same credential blob on Linux (no Keychain).
+CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 
 # See the module docstring for the gating rationale. Owned and written by
 # agent-statusline; only read here. Missing = no statusline, idle cadence.
@@ -81,16 +84,20 @@ HEADERS_TO_KEEP = (
 
 
 def fetch_token() -> tuple[str | None, dict | None]:
-    """Claude Code itself writes the OAuth token here on login, under this
-    exact service name - this is now the only place on the machine reading
-    it for quota purposes (see the module docstring). Returns
-    (token, d_error); exactly one is non-None."""
+    """Claude Code itself writes the OAuth token on login: in the macOS
+    Keychain under this exact service name, or on Linux in
+    ~/.claude/.credentials.json (same JSON) - this is the only place on the
+    machine reading it for quota purposes (see the module docstring).
+    Returns (token, d_error); exactly one is non-None."""
     try:
-        d_raw = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-            capture_output=True, text=True, timeout=5, check=True,
-        )
-        d_creds = json.loads(d_raw.stdout)
+        if sys.platform == "darwin":
+            text = subprocess.run(
+                ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5, check=True,
+            ).stdout
+        else:
+            text = CREDENTIALS_FILE.read_text()
+        d_creds = json.loads(text)
         token = d_creds.get("claudeAiOauth", {}).get("accessToken")
         if not token:
             return None, {"stage": "keychain", "type": "MissingAccessToken"}

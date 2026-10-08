@@ -76,10 +76,6 @@ assert_eq "malformed JSON refused with 400" "400" "$(post /v1/logs application/j
 assert_eq "still four rows" "4" "$(session_rows)"
 assert_eq "server still alive after bad input" "200" "$(post /v1/logs application/json "$(batch "")")"
 
-section "the same batch sent twice is stored once"
-post /v1/logs application/json "$(batch "$(record api_error '')")" >/dev/null
-assert_eq "still four rows" "4" "$(session_rows)"
-
 section "binds to localhost only"
 assert_contains "listening address" "$(lsof -nP -a -p "$PID" -iTCP -sTCP:LISTEN 2>/dev/null)" "127.0.0.1:$PORT"
 

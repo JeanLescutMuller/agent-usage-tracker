@@ -1,6 +1,6 @@
 # agent-usage-tracker
 
-Records Claude Code and Codex usage over time — quota percent, tokens, spend — from every source that has no history of its own, and keeps the research into what the quota percentages mean. Personal, user-space, macOS (LaunchAgents).
+Records Claude Code and Codex usage over time — quota percent, tokens, spend — from every source that has no history of its own, and keeps the research into what the quota percentages mean. Personal, user-space: macOS (LaunchAgents) and Linux (systemd `--user`), with every machine's data copied to a central store on the VM `H-Frank-1`.
 
 Split out of [`agent-statusline`](https://github.com/JeanLescutMuller/agent-statusline) on 2026-09-30. The status line stays there; this repo owns the data. Git history of this code between 2026-08-31 and the split lives in `agent-statusline` (up to `d744951`); older history (the original `agent-quota-tracker`) is below this tree's first commit.
 
@@ -18,7 +18,7 @@ All usage data lives in two SQLite databases per agent, split by **scope**: `dat
 ## Usage
 
 ```bash
-bash install.sh     # idempotent; requires python3
+bash install.sh     # idempotent; requires python3; LaunchAgents on macOS, systemd --user units on Linux
 bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags anything else left over
 ```
 
@@ -48,8 +48,34 @@ transcript_reader.py (every 5 min) ──────┘
 | `codex_plan_history_poller.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
 | `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
 | `transcript_reader.py` | Its own LaunchAgent, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl` | Sessions gate (`requests` table): one row per API request once it is 15 min old |
+| `receive_from_machine.py` | On the VM, run over ssh by another machine's `push_to_central.py` | That machine's new rows | Both gates, into `central/<machine>/` (see "Central store on the VM") |
 
 Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
+
+## Central store on the VM
+
+Every machine pushes its new rows to the VM `H-Frank-1` every 5 minutes; the VM keeps one copy per machine, written through the same gates. Push only: the VM never pulls (the Mac sleeps, goes offline, sits behind NAT), and a failed push is simply retried next time.
+
+```
+MacBook                                               VM H-Frank-1 (always on)
+ collectors → gates → data/<agent>/*.db                collectors → gates → data/<agent>/*.db
+ push_to_central.py ── new rows, ssh ────────────────▶ receive_from_machine.py → gates → central/<machine>/data/<agent>/*.db
+                                                       push_to_central.py (local, no ssh) ──▶ central/H-Frank-1/data/<agent>/*.db
+```
+
+| Piece | What |
+|---|---|
+| `push_to_central.py` | Every 5 min on every machine: per table, the rows above the last confirmed rowid (`state/push/watermarks.json`), in chunks of 20,000, over `ssh -C`; the watermark advances only after the VM confirms |
+| `receive_from_machine.py` | On the VM: hands each received row to the gates of `central/<machine>/` (history as sent; a re-sent row is a no-op; never touches `state/quota/claude`) |
+| Reading everything | One folder per machine under `~/opt/agent-usage-tracker/central/` on the VM, each with the same databases and views as a local install |
+
+Deploying to the VM (development stays on the Mac):
+
+```bash
+rsync -a --delete --exclude .git --exclude __pycache__ ./ H-Frank-1:dev/agent-usage-tracker/ && ssh H-Frank-1 'bash ~/dev/agent-usage-tracker/install.sh'
+```
+
+On the VM, the Codex pollers skip (Codex is not installed there), and the Claude poller reads the token from `~/.claude/.credentials.json`, so Claude Code must be logged in there.
 
 ## Contract with agent-statusline
 
@@ -76,11 +102,12 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
     │   └── _archive/                     originals kept by one-time migrations, incl. pre-sqlite-20261008T090432Z/ (every JSONL file) and its .tar.gz
     ├── state/
     │   ├── quota/claude                  latest Claude reading (see the contract above)
-    │   └── transcript_reader/offsets.json  how far each transcript has been read
-    ├── logs/                             quota-poll.{log,err}, otel-receiver.{log,err}, transcript-reader.{log,err}
-    ├── com.jeanlescut.agent-usage-tracker.plist              pollers LaunchAgent (symlinked from ~/Library/LaunchAgents/)
-    ├── com.jeanlescut.agent-usage-tracker.otel.plist         telemetry receiver LaunchAgent (same)
-    └── com.jeanlescut.agent-usage-tracker.transcripts.plist  transcript reader LaunchAgent (same)
+    │   ├── transcript_reader/offsets.json  how far each transcript has been read
+    │   └── push/watermarks.json            last rowid confirmed by the VM, per table
+    ├── central/<machine>/data/<agent>/   on the VM only: every machine's pushed copy
+    ├── logs/                             quota-poll, otel-receiver, transcript-reader, push (.log / .err)
+    └── com.jeanlescut.agent-usage-tracker{,.otel,.transcripts,.push}.plist   LaunchAgents, symlinked from ~/Library/LaunchAgents/
+                                          (Linux: the same names as .service/.timer, symlinked from ~/.config/systemd/user/)
 
 `adhoc_quotas_analysis/` is run-by-hand research, never deployed: it stays in `~/dev/agent-usage-tracker` and reads `~/opt/agent-usage-tracker/data/` from there.
 

@@ -47,7 +47,7 @@ VM central/<machine>/<agent>/  ◀── same two gates ◀───────
 | # | Step | Status |
 |---|---|---|
 | 1–4 | Schemas + gates, collectors, migration, agent-statusline compatibility | ✅ done; see `USAGE_DATA_REFERENCE.md` §6 (2026-10-08 row) |
-| 5 | Push to the VM | ⏳ next |
+| 5 | Push to the VM | ✅ 2026-10-08: tracker on the VM (systemd `--user`), every machine pushes to `central/<machine>/`; see `USAGE_DATA_REFERENCE.md` §11. Open: log Claude Code in on the VM so its own Claude poller works (credentials empty since 2026-08-27); the token also needs Claude Code to run there now and then to stay refreshed |
 | 6 | Readers, docs, tests | ✅ this repo and agent-quota-maximizer's `s1_ingest.py`; ⏳ the statusline, auto-apply and smart-orchestrator still read `state/quota/claude` (kept, written by the account gate) - switch them to the `latest` view, then drop the file |
 | 7 | Codex sessions | ⏳ |
 

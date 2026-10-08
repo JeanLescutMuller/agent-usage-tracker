@@ -73,6 +73,11 @@ def fetch_plan_history() -> tuple[dict | None, dict | None]:
 
 
 def main() -> None:
+    # A machine without Codex (the VM) is not a failure to record every hour;
+    # a missing auth.json in an existing ~/.codex still is.
+    if not AUTH_FILE.parent.is_dir():
+        print(f"skip: no {AUTH_FILE.parent}")
+        return
     now = time.time()
     d_last = ingest_account_quota.last_attempt(usage_db.open_account("codex", readonly=True), ("codex_plan_limit_history",))
     if d_last is not None:
