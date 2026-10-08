@@ -20,7 +20,7 @@ source "$SCRIPT_DIR/utils.sh"
 
 RUNTIME="$HOME/opt/agent-usage-tracker"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-LABELS="com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel"
+LABELS="com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.transcripts"
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN} agent-usage-tracker uninstall${NC}"
@@ -39,7 +39,7 @@ for label in $LABELS; do
 done
 
 step "claude telemetry settings"
-case "$(python3 "$SCRIPT_DIR/src/telemetry/merge_claude_env.py" unset)" in
+case "$(python3 "$SCRIPT_DIR/src/merge_claude_env.py" unset)" in
     changed) installed "removed the telemetry env vars from ~/.claude/settings.json" ;;
     *) ok "telemetry env vars already absent" ;;
 esac
@@ -47,7 +47,8 @@ esac
 step "runtime tree ($RUNTIME)"
 if [ -d "$RUNTIME" ]; then
     # Nothing here is written on every render except state/quota/claude (an
-    # atomic mv), so a plain rm -rf is enough - no retry loop needed.
+    # atomic replace) and the databases under data/ (kept), so a plain
+    # rm -rf is enough - no retry loop needed.
     known_targets="bin src state logs"
     for target in $known_targets; do
         rm -rf "${RUNTIME:?}/$target"

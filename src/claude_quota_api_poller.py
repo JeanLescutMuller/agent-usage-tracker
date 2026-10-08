@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Samples Anthropic's utilization API on a timer, because that side has no
-history - a missed reading is permanently lost. Appends one record per run
-to data/claude/account.jsonl: the full raw GET /api/oauth/usage response,
-unfiltered, plus its HTTP response headers - or, when the reading can't be
-taken, an `error` object saying which stage failed and why. A missing
+"""Collector: samples Anthropic's quota API (GET /api/oauth/usage) on a timer,
+because that side has no history - a missed reading is permanently lost.
+Hands one row per poll to ingest_account_quota.py, which stores it in
+data/claude/account_quotas.db: the full raw response, unfiltered, plus its
+HTTP response headers - or, when the reading can't be taken, an `error`
+object saying which stage failed and why (the poll_errors table). A missing
 reading is itself data (roughly 11% of rows historically), and "the token
 expired" and "the wifi dropped" need very different responses.
 
 Token usage is deliberately NOT logged here. It's fully recomputable at
 analysis time from the transcripts Claude Code itself already writes under
-~/.claude/projects/ (see ../../adhoc_quotas_analysis/analysis.ipynb's own recompute cell) - logging it here too
+~/.claude/projects/ (transcript_reader.py reads them) - logging it here too
 would just be storing a copy of data that already durably exists elsewhere
 on disk (cleanupPeriodDays=365 on this machine, so "durably" means about a
 year). Only log what can't be recomputed after the fact.
@@ -35,40 +36,24 @@ not installed, or never rendered) just means the heartbeat check always
 reports not-fresh, which degrades gracefully to the old flat 5-minute cadence.
 
 Note this poller's own `source: "claude_api"` rows are a fallback path now, not
-the primary one: ../../bin/ingest-claude-statusline.sh pushes a free
+the primary one: statusline_payload_reader.py stores a free
 `source: "claude_statusline"` reading on every real message, riding
 Claude Code's own in-memory rate_limits state - no network call, never
 rate-limited. This poller still matters for the gap that push path can't
 cover: a session that hasn't sent its first message yet, or a stretch with
 no statusline rendering anywhere on the machine at all. Both sources share
-this same data/claude/account.jsonl file (Codex has its own,
-data/codex/account.jsonl - see poll_codex.py).
+data/claude/account_quotas.db (Codex has its own - see
+codex_quota_api_poller.py).
 """
 import json
 import subprocess
 import time
 import urllib.request
 import urllib.error
-from datetime import datetime
 from pathlib import Path
 
-import _quota_common
-
-# src/quota_polling/ is deployed two levels under the runtime root
-# (~/opt/agent-usage-tracker/src/quota_polling/) - parent.parent.parent,
-# not parent.parent, or this would look for a nonexistent
-# src/data/ instead of the real sibling-of-src/ data/.
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-QUOTA_LOG_FILE = DATA_DIR / "claude" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
-# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
-ERROR_LOG_FILE = DATA_DIR.parent / "logs" / "claude-poll-errors.jsonl"
-
-# The "latest known quota" state file agent-statusline displays (README.md's
-# "Contract with agent-statusline"). Written here with source "claude_api"
-# via _quota_common.write_state_if_newer, same format and same freshness
-# rule as ../../bin/ingest-claude-statusline.sh's "claude_statusline"
-# writes to this same file - the same names as the rows' `source`.
-STATE_FILE = Path.home() / "opt" / "agent-usage-tracker" / "state" / "quota" / "claude"
+import ingest_account_quota
+import usage_db
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
@@ -183,41 +168,28 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
                             "detail": str(exc)}
 
 
-def _epoch(iso: str | None) -> str:
-    """Converts an ISO 8601 resets_at (fractional seconds and/or a bare
-    "Z" suffix, same formats the API sends) to an epoch-seconds string, or
-    "" if there's nothing to convert - mirrors the epoch filter the old
-    (now-removed) refresh-claude-quota.sh used to apply at read time."""
-    if not iso:
-        return ""
+def is_fresh(path: Path, window_seconds: float, now: float) -> bool:
+    """True if `path`'s mtime is within window_seconds of now. A missing file
+    is just not fresh, which degrades to the idle cadence."""
     try:
-        return str(int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()))
-    except ValueError:
-        return ""
+        return (now - path.stat().st_mtime) < window_seconds
+    except OSError:
+        return False
 
 
 def _last_log_row() -> dict | None:
-    """The last logged row (any source, any outcome, push rows included) -
-    used only for the idle-cadence fallback below."""
-    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE)
+    """The newest row (any source, any outcome, push rows included) - used
+    only for the idle-cadence fallback below."""
+    return ingest_account_quota.last_attempt(usage_db.open_account("claude", readonly=True))
 
 
 def _last_claude_log_row() -> dict | None:
-    """The last logged row from THIS poller specifically, not from
-    ../../bin/ingest-claude-statusline.sh's frequent claude_statusline
-    pushes into the same data/claude/account.jsonl file - scanning back
-    past intervening push rows is required here, reading the literal last
-    line missed a real Retry-After backoff for a full tick once already
-    (2026-08-30, back when this file also interleaved Codex rows: a Codex
-    row landed as the tail seconds before this ran, its `error` was
-    silently treated as "no backoff active", and the poller polled straight
-    into a live 429 lockout it should have been sitting out - the whole
-    point of the backoff check below. The Codex interleaving is gone since
-    the 2026-08-31 per-provider file split, but the same discipline still
-    applies to claude_statusline rows within this file, so the filter stays).
-    Since 2026-10-04 a failed attempt (the 429 carrying Retry-After) lives in
-    ERROR_LOG_FILE, so both files are read and the newest row wins."""
-    return _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("claude_api",))
+    """The newest attempt from THIS poller specifically, reading or failure,
+    never one of statusline_payload_reader.py's frequent claude_statusline
+    rows: reading only the newest row of any source once missed a real
+    Retry-After backoff for a full tick (2026-08-30) - the poller polled
+    straight into a live 429 lockout it should have been sitting out."""
+    return ingest_account_quota.last_attempt(usage_db.open_account("claude", readonly=True), ("claude_api",))
 
 
 def _should_poll(now: float) -> bool:
@@ -231,7 +203,7 @@ def _should_poll(now: float) -> bool:
                 # Server-mandated backoff always wins, active session or not -
                 # see the note on the retry_after_s capture above.
                 return False
-    if _quota_common.is_fresh(HEARTBEAT_FILE, ACTIVE_WINDOW_SECONDS, now):
+    if is_fresh(HEARTBEAT_FILE, ACTIVE_WINDOW_SECONDS, now):
         # Watched: every ACTIVE_INTERVAL_SECONDS, timed from this poller's own
         # last row (push rows don't count, they cost no API call).
         return last_claude_row is None or \
@@ -242,8 +214,6 @@ def _should_poll(now: float) -> bool:
 
 
 def main() -> None:
-    QUOTA_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-
     now = time.time()
     if not _should_poll(now):
         print(f"skip: last reading is under {ACTIVE_INTERVAL_SECONDS}s old (watched) or {IDLE_INTERVAL_SECONDS}s old (idle)")
@@ -262,20 +232,9 @@ def main() -> None:
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
-
-    if d_api is not None:
-        five_hour = d_api.get("five_hour") or {}
-        seven_day = d_api.get("seven_day") or {}
-        _quota_common.write_state_if_newer(
-            STATE_FILE,
-            round(five_hour.get("utilization") or 0),
-            _epoch(five_hour.get("resets_at")),
-            round(seven_day.get("utilization") or 0),
-            _epoch(seven_day.get("resets_at")),
-            "claude_api",
-            d_record["ts"],
-        )
+    # The gate stores a reading in account_quotas (and refreshes
+    # state/quota/claude when newer), a failed attempt in poll_errors.
+    ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_record)
 
 
 if __name__ == "__main__":

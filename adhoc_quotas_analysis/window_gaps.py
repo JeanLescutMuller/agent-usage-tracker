@@ -18,7 +18,8 @@ import json
 import os
 import statistics
 
-QUOTA_LOG = os.path.expanduser('~/opt/agent-usage-tracker/data/claude/account.jsonl')
+from account_rows import account_lines
+
 TRANSCRIPTS = os.path.expanduser('~/.claude/projects/**/*.jsonl')
 GRID_S = 600           # 5h/7d `resets_at` is snapped to 10 min (5h) / 1 h (7d); 10 min is the common divisor
 GRID_NOISE_H = 1 / 3   # gaps up to 20 min are indistinguishable from grid rounding, not counted as idle
@@ -38,7 +39,7 @@ def to_epoch(iso):
 # with a null window just means that session's client-side copy expired, so those rows are kept
 # for window discovery but never counted as evidence of an idle gap.
 l_readings = []
-for line in open(QUOTA_LOG):
+for line in account_lines('claude'):
     d_row = json.loads(line)
     if d_row.get('source') == 'claude_statusline':
         l_readings.append((d_row['ts'], 'push',

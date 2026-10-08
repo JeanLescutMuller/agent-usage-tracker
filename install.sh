@@ -9,9 +9,13 @@
 # Deploys, under ~/opt/agent-usage-tracker:
 # - bin/ingest-claude-statusline.sh, the entry point the Claude statusline
 #   (the separate agent-statusline project) pipes its stdin payload into;
-# - src/quota_polling/ and its 60s LaunchAgent;
-# - src/telemetry/otlp_receiver.py and its KeepAlive LaunchAgent, plus the
-#   telemetry keys in ~/.claude/settings.json's `env`.
+# - src/*.py: the two gates (ingest_*.py, the only writers of the
+#   databases), the collectors, and usage_db.py;
+# - three LaunchAgents: the pollers (60s tick), the telemetry receiver
+#   (KeepAlive) and the transcript reader (every 5 min), plus the telemetry
+#   keys in ~/.claude/settings.json's `env`.
+# The databases (data/<agent>/account_quotas.db, sessions_usages.db) are
+# created by the gates on first write.
 # Does NOT deploy adhoc_quotas_analysis/: run-by-hand research tooling stays
 # in ~/dev/agent-usage-tracker and runs from there (~/opt is for what a
 # scheduler runs unattended).
@@ -25,7 +29,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/utils.sh"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "jq not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
 
 RUNTIME="$HOME/opt/agent-usage-tracker"
@@ -45,6 +48,15 @@ _deploy() {
     cp "$src" "$target"
     chmod +x "$target" 2>/dev/null || true
     installed "$(basename "$target")"
+}
+
+# Like _deploy, with __PYTHON3__ replaced by this machine's interpreter.
+_deploy_rendered() {
+    local src="$1" target="$2" tmp
+    tmp="$(mktemp)"
+    sed -e "s#__PYTHON3__#$PYTHON3#g" "$src" > "$tmp"
+    _deploy "$tmp" "$target"
+    rm -f "$tmp"
 }
 
 # Renders a LaunchAgent template into the runtime tree (the real file) and
@@ -71,32 +83,31 @@ _launch_agent() {
 }
 
 step "runtime layout"
-# data/<agent>/account.jsonl + data/<agent>/<session-id>.jsonl - see
+# data/<agent>/account_quotas.db + sessions_usages.db - see
 # USAGE_DATA_REFERENCE.md §1.
 mkdir -p "$RUNTIME/data/claude" "$RUNTIME/data/codex" "$RUNTIME/state" "$RUNTIME/logs"
 ok "data/, state/, logs/"
 
-step "statusline ingest"
-_deploy "$SCRIPT_DIR/bin/ingest-claude-statusline.sh" "$RUNTIME/bin/ingest-claude-statusline.sh"
-
-step "quota polling"
-for f in "$SCRIPT_DIR"/src/quota_polling/*.py; do
-    _deploy "$f" "$RUNTIME/src/quota_polling/$(basename "$f")"
+step "code"
+_deploy_rendered "$SCRIPT_DIR/bin/ingest-claude-statusline.sh" "$RUNTIME/bin/ingest-claude-statusline.sh"
+for f in "$SCRIPT_DIR"/src/*.py; do
+    # The settings merge helper runs from the repo (below), never deployed.
+    [ "$(basename "$f")" = merge_claude_env.py ] && continue
+    _deploy "$f" "$RUNTIME/src/$(basename "$f")"
 done
-_launch_agent "$SCRIPT_DIR/src/quota_polling/com.jeanlescut.agent-usage-tracker.plist.template" \
-    com.jeanlescut.agent-usage-tracker "ticks every 60s, every poller self-throttles"
 
-step "telemetry receiver"
-# Only the receiver is deployed; merge_claude_env.py and its JSON run from
-# the repo.
-_deploy "$SCRIPT_DIR/src/telemetry/otlp_receiver.py" "$RUNTIME/src/telemetry/otlp_receiver.py"
-_launch_agent "$SCRIPT_DIR/src/telemetry/com.jeanlescut.agent-usage-tracker.otel.plist.template" \
-    com.jeanlescut.agent-usage-tracker.otel "listens on 127.0.0.1:4318"
+step "LaunchAgents"
+_launch_agent "$SCRIPT_DIR/src/launchd/com.jeanlescut.agent-usage-tracker.plist.template" \
+    com.jeanlescut.agent-usage-tracker "pollers: ticks every 60s, every poller self-throttles"
+_launch_agent "$SCRIPT_DIR/src/launchd/com.jeanlescut.agent-usage-tracker.otel.plist.template" \
+    com.jeanlescut.agent-usage-tracker.otel "telemetry receiver on 127.0.0.1:4318"
+_launch_agent "$SCRIPT_DIR/src/launchd/com.jeanlescut.agent-usage-tracker.transcripts.plist.template" \
+    com.jeanlescut.agent-usage-tracker.transcripts "transcript reader, every 5 min"
 
 step "claude telemetry settings"
-# Only the keys in src/telemetry/claude_telemetry_env.json, inside `env`.
+# Only the keys in src/claude_telemetry_env.json, inside `env`.
 # Takes effect for Claude sessions started after this.
-case "$("$PYTHON3" "$SCRIPT_DIR/src/telemetry/merge_claude_env.py" set)" in
+case "$("$PYTHON3" "$SCRIPT_DIR/src/merge_claude_env.py" set)" in
     changed) installed "telemetry env vars in ~/.claude/settings.json (new sessions only)" ;;
     unchanged) ok "telemetry env vars in ~/.claude/settings.json" ;;
     *) fail "telemetry env vars in ~/.claude/settings.json" ;;

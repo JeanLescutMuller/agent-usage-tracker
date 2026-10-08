@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""Samples Codex CLI's rate-limit/usage state on a timer, same rationale as
-poll_claude.py: this side has no history either, a missed reading is
-permanently lost. Appends one record per run to
-data/codex/account.jsonl (this agent's account-scope file, a sibling of
-poll_claude.py's data/claude/account.jsonl - per-provider since 2026-08-31, per-scope since 2026-09-30, see
-AGENTS.md's "Naming history") - the full raw `account/rateLimits/read` and
-`account/usage/read` results, unfiltered, or an `error` object saying which
-stage failed and why.
+"""Collector: samples Codex CLI's rate-limit/usage state on a timer, same
+rationale as claude_quota_api_poller.py: this side has no history either, a
+missed reading is permanently lost. Hands one row per poll to
+ingest_account_quota.py, which stores it in data/codex/account_quotas.db -
+the full raw `account/rateLimits/read` and `account/usage/read` results,
+unfiltered, or an `error` object saying which stage failed and why.
 
 Unlike Claude Code, Codex has no plain HTTP usage endpoint. Its CLI
 statusline gets rate-limit data from a JSON-RPC method on `codex
@@ -21,20 +19,20 @@ interactive sessions use.
 Per-thread token/cost detail (account/usage/read with a threadId param)
 is deliberately NOT fetched here - it needs an enumerable list of thread
 ids and isn't part of "the current rate-limit snapshot", the same
-"unrecoverable" bar poll_claude.py applies. That's future work for a
-recompute_codex_events.py analogue, not this poller.
+"unrecoverable" bar claude_quota_api_poller.py applies. That's future work for a
+Codex reader of ~/.codex/sessions, not this poller.
 
 The shared LaunchAgent tick is 60s. Three cadence tiers, checked in order,
-mirroring poll_claude.py's heartbeat-driven speedup but adding a tier it
+mirroring claude_quota_api_poller.py's heartbeat-driven speedup but adding a tier it
 has no equivalent of:
 
 1. A local Codex session file was modified within SESSION_FRESH_SECONDS -
    an active session already writes its own rate_limits snapshot to
    ~/.codex/sessions/**/*.jsonl on every turn (the `token_count` event; see
    recompute_codex_events.py and AGENTS.md's 2026-08-30 correction), fresher
-   than any poll here could be. Skip entirely. poll_claude.py has no
+   than any poll here could be. Skip entirely. claude_quota_api_poller.py has no
    equivalent tier - Claude Code's in-memory rate-limit state is never
-   written to disk on its own (see ../../bin/ingest-claude-statusline.sh), so
+   written to disk on its own (see statusline_payload_reader.py), so
    polling is Claude's *only* source of truth even mid-session.
 2. Otherwise, the Codex statusline's heartbeat/codex file (written by the
    separate agent-statusline project, same shape as heartbeat/claude) is
@@ -46,15 +44,15 @@ has no equivalent of:
    tick exactly (60s) - a slower threshold degrades to half the intended
    cadence, since the skip window then spans more than one tick and never
    clears it on a single tick's elapsed time (proven during
-   the 2026-08-31 merge into agent-statusline, see poll_claude.py's history).
+   the 2026-08-31 merge into agent-statusline, see claude_quota_api_poller.py's history).
 3. Neither - nothing local to lean on and nobody watching. Poll only if the
    last logged reading is IDLE_POLL_INTERVAL_SECONDS old, so a fully idle
    machine settles to the old flat 5-minute cadence instead of a 60s
    busy-loop for no reason. This tier is genuinely a backstop, same as
-   poll_claude.py's idle cadence - just here to keep the log from going
+   claude_quota_api_poller.py's idle cadence - just here to keep the log from going
    dark for long unattended stretches, not to catch anything reliably.
 
-Deliberately no dependency on poll_claude.py for any of this - only on
+Deliberately no dependency on claude_quota_api_poller.py for any of this - only on
 agent-statusline's heartbeat file, read-only, which degrades gracefully to
 tier 3 if the statusline is not installed.
 """
@@ -64,16 +62,9 @@ import subprocess
 import time
 from pathlib import Path
 
-import _quota_common
+import ingest_account_quota
+import usage_db
 
-# src/quota_polling/ is deployed two levels under the runtime root
-# (~/opt/agent-usage-tracker/src/quota_polling/) - parent.parent.parent,
-# not parent.parent, or this would look for a nonexistent
-# src/data/ instead of the real sibling-of-src/ data/.
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-QUOTA_LOG_FILE = DATA_DIR / "codex" / "account.jsonl"  # account scope: the meter (USAGE_DATA_REFERENCE.md §1)
-# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
-ERROR_LOG_FILE = DATA_DIR.parent / "logs" / "codex-poll-errors.jsonl"
 SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat" / "codex"
 
@@ -175,15 +166,18 @@ def fetch_codex_state() -> tuple[dict | None, dict | None, dict | None]:
             proc.kill()
 
 
+def is_fresh(path: Path, window_seconds: float, now: float) -> bool:
+    """True if `path`'s mtime is within window_seconds of now; a missing file
+    is not fresh."""
+    try:
+        return (now - path.stat().st_mtime) < window_seconds
+    except OSError:
+        return False
+
+
 def _last_codex_log_ts() -> int | None:
-    """Timestamp of the last codex-sourced row, from the tail of the log
-    (see _quota_common.tail_json_rows). The source filter is now redundant
-    in the common case (the Codex log only ever gets
-    `source: "codex"` rows written to it since the 2026-08-31 per-provider
-    split), but kept as a cheap defensive check against a stray/malformed
-    row rather than trusting file identity alone. Since 2026-10-04 failed
-    attempts live in ERROR_LOG_FILE, so both files are read."""
-    d_row = _quota_common.last_poll_row(QUOTA_LOG_FILE, ERROR_LOG_FILE, ("codex_app_server",))
+    """When this poller last tried, reading or failure."""
+    d_row = ingest_account_quota.last_attempt(usage_db.open_account("codex", readonly=True), ("codex_app_server",))
     return d_row["ts"] if d_row else None
 
 
@@ -215,14 +209,13 @@ def _codex_session_recently_active(now: float) -> bool:
 
 
 def main() -> None:
-    QUOTA_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     now = time.time()
     if _codex_session_recently_active(now):
         print(f"skip: a Codex session file was modified under {SESSION_FRESH_SECONDS}s ago "
               f"- local rate_limits snapshot is already fresher than a poll would be")
         return
-    is_watched = _quota_common.is_fresh(HEARTBEAT_FILE, HEARTBEAT_ACTIVE_WINDOW_SECONDS, now)
+    is_watched = is_fresh(HEARTBEAT_FILE, HEARTBEAT_ACTIVE_WINDOW_SECONDS, now)
     threshold = WATCHED_POLL_INTERVAL_SECONDS if is_watched else IDLE_POLL_INTERVAL_SECONDS
     last_ts = _last_codex_log_ts()
     if last_ts is not None and (now - last_ts) < threshold:
@@ -240,7 +233,7 @@ def main() -> None:
         "codex_usage": d_usage,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
+    ingest_account_quota.add_row(usage_db.open_account("codex"), "codex", d_record)
 
 
 if __name__ == "__main__":

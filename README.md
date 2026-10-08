@@ -13,38 +13,52 @@ Two canonical files, which downstream projects (`agent-quota-maximizer`) link to
 
 The dollar conversions both assume are derived in `adhoc_quotas_analysis/CONCLUSIONS.md`.
 
-All usage data is split by agent and by **scope**: `data/<agent>/account.jsonl` holds the account-wide meter (quota percent), `data/<agent>/<session-id>.jsonl` holds one session's tokens and spend. **Quota percent is account-scope only**, never in a session file — see `USAGE_DATA_REFERENCE.md` §1.
+All usage data lives in two SQLite databases per agent, split by **scope**: `data/<agent>/account_quotas.db` holds the account-wide meter (quota percent), `data/<agent>/sessions_usages.db` holds tokens and spend per session and per request, with the execution folder. **Quota percent is account-scope only**, never in the sessions database — see `USAGE_DATA_REFERENCE.md` §1. Until 2026-10-08 the same data was in JSONL files (`account.jsonl`, `<session-id>.jsonl`); every line was migrated verbatim (`raw` column).
 
 ## Usage
 
 ```bash
-bash install.sh     # idempotent; requires python3 and jq
+bash install.sh     # idempotent; requires python3
 bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags anything else left over
 ```
 
 `install.sh` assumes a bare machine and carries no migration logic: to move between incompatible layouts, run `uninstall.sh`, resolve reported orphans, then `install.sh`. It also adds Claude Code's OpenTelemetry keys to the `env` object of `~/.claude/settings.json` (only those keys; `uninstall.sh` removes the ones still holding our values). They take effect for Claude sessions started afterwards.
 
-## Writers
+## Collectors and gates
 
-| Writer | Runs | Source | Writes |
+Each database has one **gate**, the only code that writes it: it checks every row (types, scope rule), skips repeats, and stores the row's JSON verbatim in `raw`. **Collectors** read a source and hand rows to a gate; they never open a database for writing (`tests/test_repo_hygiene.sh` enforces it).
+
+```
+COLLECTORS (src/)                          GATES (src/)                  DATABASES (data/<agent>/)
+statusline_payload_reader.py ─quota──────┐
+claude_quota_api_poller.py ──────────────┤
+codex_quota_api_poller.py ───────────────┤
+codex_plan_history_poller.py ────────────┴▶ ingest_account_quota.py ─▶ account_quotas.db  (+ state/quota/claude)
+statusline_payload_reader.py ─session────┐
+telemetry_receiver.py ───────────────────┤
+transcript_reader.py ────────────────────┴▶ ingest_session_usage.py ─▶ sessions_usages.db
+```
+
+| Collector | Runs | Source | Hands to |
 |---|---|---|---|
-| `bin/ingest-claude-statusline.sh` | Every Claude status-line render (agent-statusline pipes the payload in) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | `data/claude/account.jsonl` + `data/claude/<session-id>.jsonl` + `state/quota/claude` (source `claude_statusline`); nothing when the transcript has no `assistant` entry to date the reading, and no row when the session already wrote the same one |
-| `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick; polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | `data/claude/account.jsonl` + `state/quota/claude` (source `claude_api`); a failed attempt only to `logs/claude-poll-errors.jsonl` |
-| `src/quota_polling/poll_codex.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | `data/codex/account.jsonl`; a failed attempt only to `logs/codex-poll-errors.jsonl` |
-| `src/quota_polling/poll_codex_plan_history.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | `data/codex/account.jsonl`; a failed attempt only to `logs/codex-poll-errors.jsonl` |
-| `src/telemetry/otlp_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | `data/claude/<session-id>.jsonl` |
+| `statusline_payload_reader.py` (run by `bin/ingest-claude-statusline.sh`) | Every Claude status-line render, before the display (about 28 ms) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | Account gate (source `claude_statusline`) and sessions gate (snapshot). Nothing when the transcript has no `assistant` entry to date the reading; repeats of the same session's reading are skipped |
+| `claude_quota_api_poller.py` | LaunchAgent, 60 s tick (`run_pollers.py`); polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | Account gate (`claude_api`); a failed attempt goes to the `poll_errors` table |
+| `codex_quota_api_poller.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
+| `codex_plan_history_poller.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
+| `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
+| `transcript_reader.py` | Its own LaunchAgent, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl` | Sessions gate (`requests` table): one row per API request once it is 15 min old |
 
-Details, row shapes and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
+Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
 
 ## Contract with agent-statusline
 
-The two projects share exactly three files, each written by one side only. Neither writes into the other's tree, and each works without the other.
+The two projects share exactly three files, each written by one side only. Neither writes into the other's tree, and each works without the other. Unchanged by the 2026-10-08 move to SQLite.
 
 | Interface | Written by | Read by | What |
 |---|---|---|---|
-| `~/opt/agent-usage-tracker/bin/ingest-claude-statusline.sh` | this repo (deployed) | agent-statusline's Claude provider runs it | The Claude provider pipes its raw stdin payload in, unchanged, on every render, before display. Which fields are kept, and where, is this repo's business only. Must always exit 0 quickly; its output is ignored. |
-| `~/opt/agent-usage-tracker/state/quota/claude` | ingest (`claude_statusline`), `poll_claude.py` (`claude_api`) | agent-statusline's Claude provider, whatever the source | The freshest known 5h/7d reading: six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded. Each writer overwrites only if its `observed_at` is newer, so every open session converges on the account's freshest reading. `source` is information only. A push reading is dated by its transcript's last `assistant` entry and is never written undated, so an idle session's frozen reading can't win. |
-| `~/opt/agent-statusline/state/heartbeat/{claude,codex}` | agent-statusline, every render | `poll_claude.py`, `poll_codex.py` | Only the mtime matters: a status line is on screen, so poll faster. Missing = idle cadence. |
+| `~/opt/agent-usage-tracker/bin/ingest-claude-statusline.sh` | this repo (deployed) | agent-statusline's Claude provider runs it | The Claude provider pipes its raw stdin payload in, unchanged, on every render, before display. Which fields are kept, and where, is this repo's business only. Runs `statusline_payload_reader.py` in the foreground (about 28 ms), so the render that brings a new reading displays it. Always exits 0; its output is ignored. |
+| `~/opt/agent-usage-tracker/state/quota/claude` | the account gate, for `claude_statusline` and `claude_api` readings | agent-statusline's Claude provider, whatever the source; also `auto-apply` (`runner/limits.py`) and `smart-orchestrator` (`so.py`) | The freshest known 5h/7d reading: six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded. Each writer overwrites only if its `observed_at` is newer, so every open session converges on the account's freshest reading. `source` is information only. A push reading is dated by its transcript's last `assistant` entry and is never written undated, so an idle session's frozen reading can't win. |
+| `~/opt/agent-statusline/state/heartbeat/{claude,codex}` | agent-statusline, every render | `claude_quota_api_poller.py`, `codex_quota_api_poller.py` | Only the mtime matters: a status line is on screen, so poll faster. Missing = idle cadence. |
 
 Without agent-statusline there are no push rows: Claude Code runs a single `statusLine` command, so nothing else can feed the ingest script. Claude's meter history then comes only from the poller, on its ~5 min idle cadence and subject to its 429s, and there are no session cost or `prompt_cache` rows. Codex is unaffected. What the status line shows without this repo is agent-statusline's business.
 
@@ -52,23 +66,20 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
 
     ~/opt/agent-usage-tracker/
     ├── bin/ingest-claude-statusline.sh   the statusline's entry point (see the contract above)
-    ├── src/
-    │   ├── quota_polling/                deployed poll_all.py, poll_claude.py, poll_codex.py, poll_codex_plan_history.py, _quota_common.py
-    │   └── telemetry/otlp_receiver.py
+    ├── src/                              usage_db.py, the two ingest_*.py gates, the collectors, run_pollers.py
     ├── data/                             see USAGE_DATA_REFERENCE.md §1
     │   ├── claude/
-    │   │   ├── account.jsonl             account scope: Claude poll + push meter readings (quota percent)
-    │   │   └── <session-id>.jsonl        session scope: push session rows + telemetry rows (never a percent)
-    │   ├── codex/account.jsonl           account scope: Codex poll + plan-history rows
-    │   ├── _unattributed/                telemetry events with no usable session id (created on the first one)
-    │   └── _archive/                     originals kept by one-time migrations (2026-10-04 split_errors.py; the 2026-09-30 ones were removed by hand)
+    │   │   ├── account_quotas.db         account scope: Claude readings (quota percent), failed poll attempts
+    │   │   └── sessions_usages.db        session scope: requests, telemetry events, session snapshots (never a percent)
+    │   ├── codex/account_quotas.db       account scope: Codex readings and plan-limit history
+    │   └── _archive/                     originals kept by one-time migrations, incl. pre-sqlite-20261008T090432Z/ (every JSONL file) and its .tar.gz
     ├── state/
-    │   ├── quota/claude                  latest reading only (see the contract above)
-    │   ├── ingest/<session-id>           what each session's push last wrote, for dedup; pruned after 30 days idle
-    │   └── poll/codex_plan_limit_history last plan-history attempt
-    ├── logs/                             quota-poll.{log,err}, otel-receiver.{log,err}, {claude,codex}-poll-errors.jsonl (failed poll attempts, never in data/)
-    ├── com.jeanlescut.agent-usage-tracker.plist        poll LaunchAgent (symlinked from ~/Library/LaunchAgents/)
-    └── com.jeanlescut.agent-usage-tracker.otel.plist   receiver LaunchAgent (same)
+    │   ├── quota/claude                  latest Claude reading (see the contract above)
+    │   └── transcript_reader/offsets.json  how far each transcript has been read
+    ├── logs/                             quota-poll.{log,err}, otel-receiver.{log,err}, transcript-reader.{log,err}
+    ├── com.jeanlescut.agent-usage-tracker.plist              pollers LaunchAgent (symlinked from ~/Library/LaunchAgents/)
+    ├── com.jeanlescut.agent-usage-tracker.otel.plist         telemetry receiver LaunchAgent (same)
+    └── com.jeanlescut.agent-usage-tracker.transcripts.plist  transcript reader LaunchAgent (same)
 
 `adhoc_quotas_analysis/` is run-by-hand research, never deployed: it stays in `~/dev/agent-usage-tracker` and reads `~/opt/agent-usage-tracker/data/` from there.
 

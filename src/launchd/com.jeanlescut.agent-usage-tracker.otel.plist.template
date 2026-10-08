@@ -7,11 +7,11 @@
 
     <!-- A long-running receiver, not a periodic job: Claude Code pushes
          telemetry to it, so it must be listening whenever a Claude session
-         runs. See otlp_receiver.py's docstring. -->
+         runs. See telemetry_receiver.py's docstring. -->
     <key>ProgramArguments</key>
     <array>
         <string>__PYTHON3__</string>
-        <string>__RUNTIME__/src/telemetry/otlp_receiver.py</string>
+        <string>__RUNTIME__/src/telemetry_receiver.py</string>
     </array>
 
     <key>RunAtLoad</key>

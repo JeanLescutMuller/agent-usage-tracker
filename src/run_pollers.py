@@ -5,14 +5,14 @@ would treat them as independent jobs if they were registered separately,
 this keeps that isolation while still using a single scheduled job. Each
 poller remains fully runnable standalone by hand for debugging.
 
-Usage: python3 poll_all.py
+Usage: python3 run_pollers.py
 """
 import subprocess
 import sys
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-POLLERS = ("poll_claude.py", "poll_codex.py", "poll_codex_plan_history.py")
+POLLERS = ("claude_quota_api_poller.py", "codex_quota_api_poller.py", "codex_plan_history_poller.py")
 
 
 def main() -> None:

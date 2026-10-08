@@ -4,59 +4,67 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else (paths updated for the repo split the same day). Row counts are as of 2026-09-29: 113,002 Claude rows, 4,006 Codex rows.*
+*Last verified: 2026-10-08 (move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
 
 ---
 
 ## 1. Overview
 
-All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). Until the 2026-09-30 repo split it lived under `~/opt/agent-statusline/`, in the same layout. The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `bin/ingest-claude-statusline.sh`, and displays this project's `state/quota/claude` (README.md's "Contract with agent-statusline").
+All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `bin/ingest-claude-statusline.sh`, and displays this project's `state/quota/claude` (README.md's "Contract with agent-statusline").
 
-**Usage data is split by agent and by scope** (since 2026-09-30):
+**Usage data is in two SQLite databases per agent, split by scope** (since 2026-10-08; JSONL files before, same split since 2026-09-30):
 
 ```
 data/
 ├── claude/
-│   ├── account.jsonl          account scope: the meter
-│   └── <session-id>.jsonl     session scope: one file per Claude session
+│   ├── account_quotas.db      account scope: account_quotas (readings), poll_errors (failed poll attempts), view latest
+│   └── sessions_usages.db     session scope: requests, telemetry, session_snapshots, scans, views usage_requests and usage_5m
 ├── codex/
-│   └── account.jsonl          account scope: the meter (no Codex session files - see below)
-├── _unattributed/             telemetry events that carried no usable session id
-└── _archive/                  originals kept by one-time migrations: the 2026-10-04 account files from before split_errors.py (the 2026-09-30 originals were removed by hand)
+│   └── account_quotas.db      account scope (no Codex sessions database yet - see below)
+└── _archive/                  originals kept by one-time migrations; pre-sqlite-20261008T090432Z/ holds every JSONL file the databases were built from
 ```
 
-**`data/` holds readings only.** A failed poll attempt is not data: since 2026-10-04 it goes to `logs/claude-poll-errors.jsonl` or `logs/codex-poll-errors.jsonl` (same row shape, `error` set), and the error rows written to `data/` before that were moved there by `adhoc_quotas_analysis/split_errors.py`. Readers of `data/` never need to filter errors; the error logs are for failure research (429 rates, lockouts) and for the pollers' own backoff.
+| Table | One row per | Written by (through its gate) |
+|---|---|---|
+| `account_quotas` | Quota reading (§2, §3) | Statusline payload reader, the three pollers |
+| `poll_errors` | Failed poll attempt (same JSON shape, `error` set) | The pollers |
+| `session_snapshots` | Session's cumulative cost, model and cache statistics at one moment (§2.1) | Statusline payload reader |
+| `telemetry` | Claude Code OpenTelemetry usage event (§9) | Telemetry receiver |
+| `requests` | API request found in a transcript (§10) | Transcript reader |
+| `scans` | Transcript-reader run, with `complete_through_ts` | Transcript reader |
+
+**Common to every table:** `ts` (Unix epoch, when the row was true: `observed_at` for push and telemetry rows, the poll time for poll rows, the request's first line for requests) and `dt` (the same instant, ISO 8601 UTC) come first. Every table except `requests` and `scans` keeps the row's JSON **verbatim in `raw`**: for migrated rows the original JSONL line byte for byte, for new rows the same shape the JSONL writer produced. So §2, §3 and §9 below describe `raw`, and any old JSONL reader is served by `SELECT raw FROM <table> ORDER BY rowid`. Every row is insert-only; `row_hash` (SHA-1 of `raw`, UNIQUE) or `request_id` (UNIQUE) makes re-inserting it a no-op.
+
+**Only the gates write.** `src/ingest_account_quota.py` writes `account_quotas.db`, `src/ingest_session_usage.py` writes `sessions_usages.db`; collectors hand rows to them. The gates reject a malformed row, an account row with per-session fields, and a session row with any percent-like key.
+
+**Reading: open the database normally and run `PRAGMA query_only = ON`, not a `mode=ro` URI.** macOS's system SQLite intermittently refuses a mode=ro open of these WAL databases ("unable to open database file") when no connection holds the `-shm` file at that instant, which is most of the time [verified 2026-10-08].
 
 **The scope rule — percent is account-scope only.** The quota meter is one account-level number: when two sessions spend at once, there is no per-session percentage — not a hidden one, an undefined one. So:
 
-| File | Carries | Never carries |
+| Database | Carries | Never carries |
 |---|---|---|
-| `data/<agent>/account.jsonl` | Meter percent, reset times, `observed_at`, `source`, and `observed_by_session` on push rows | Per-session cost or token totals |
-| `data/<agent>/<session-id>.jsonl` | Tokens, USD, model, cache statistics, `observed_at`, `source` | **A quota percent, under any name** |
+| `data/<agent>/account_quotas.db` | Meter percent, reset times, `source`, and `observed_by_session` on push rows | Per-session cost or token totals |
+| `data/<agent>/sessions_usages.db` | Tokens, USD, model, execution folder, entrypoint, cache statistics | **A quota percent, under any name** |
 
-The two scopes join on **`observed_at`** (a time join); no field is duplicated across them. Downstream projects must read this rule from here rather than infer it. Nothing in this repository estimates or apportions a per-session percentage, and nothing will: any such figure is derived downstream, with its uncertainty stated there.
+The two scopes join on **`ts`** (a time join); no field is duplicated across them. Downstream projects must read this rule from here rather than infer it. Nothing in this repository estimates or apportions a per-session percentage, and nothing will: any such figure is derived downstream, with its uncertainty stated there.
 
-`observed_by_session` on an account row names the session that was rendering when the reading was taken — a free liveness signal — **not** the session whose usage it is. It replaced the push rows' `session_id` so it cannot be misread as attribution.
+`observed_by_session` on an account row names the session that was rendering when the reading was taken — a free liveness signal — **not** the session whose usage it is.
 
-Codex has no session files: nothing we capture is Codex-session-scoped. Its per-turn and per-thread tokens stay in Codex's own `~/.codex/sessions/` files (Sources §4.1).
+Codex has no sessions database yet: its per-turn tokens stay in Codex's own `~/.codex/sessions/` files (Sources §4.1); reading them is step 7 of `TODO.md`'s build plan.
 
-Two kinds of file in total, easy to conflate:
-
-| Kind | Files | Purpose | Read live? |
-|---|---|---|---|
-| **History logs** | `data/<agent>/account.jsonl`, `data/claude/<session-id>.jsonl` | Append-only raw record, kept for research (`adhoc_quotas_analysis/`) and for downstream projects | No |
-| **Latest-reading state** | `state/quota/claude` (this project), and agent-statusline's own `state/quota/codex` | One reading per provider, FS-delimited (formats differ, §4) | Yes, by the status line |
+Besides the databases, one small file: **`state/quota/claude`**, the latest Claude reading, read live by agent-statusline, auto-apply and smart-orchestrator (§4).
 
 ### 1.1 Writers
 
 | Writer | Scheduled by | Upstream source | Writes |
 |---|---|---|---|
-| **Claude push** — `bin/ingest-claude-statusline.sh` | Every Claude status-line render: agent-statusline's Claude provider pipes its raw stdin payload in | Statusline stdin (Sources §3.1) | `claude/account.jsonl` + `claude/<session-id>.jsonl` (both `source: "claude_statusline"`) + `state/quota/claude` (source `statusline`) |
-| **Claude poller** — `src/quota_polling/poll_claude.py` | LaunchAgent, 60 s tick, via `poll_all.py` | `GET /api/oauth/usage` (Sources §3.5) | `claude/account.jsonl` (`source: "claude_api"`) + `state/quota/claude` (source `claude_api`) |
-| **Codex poller** — `src/quota_polling/poll_codex.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | `codex/account.jsonl` (`source: "codex_app_server"`) |
-| **Codex plan-history poller** — `src/quota_polling/poll_codex_plan_history.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | `codex/account.jsonl` (`source: "codex_plan_limit_history"`) + `state/poll/codex_plan_limit_history` (last attempt) |
-| **Telemetry receiver** — `src/telemetry/otlp_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `claude/<session-id>.jsonl` (`source: "claude_otel"`, §9) |
-| **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | `~/opt/agent-statusline/state/quota/codex` only, at most once per 60 s |
+| **Claude push** — `src/statusline_payload_reader.py`, run in the foreground by `bin/ingest-claude-statusline.sh` (about 28 ms per render) | Every Claude status-line render: agent-statusline's Claude provider pipes its raw stdin payload in | Statusline stdin (Sources §3.1) | `account_quotas` + `session_snapshots` (both `source: "claude_statusline"`) + `state/quota/claude` |
+| **Claude poller** — `src/claude_quota_api_poller.py` | LaunchAgent, 60 s tick, via `run_pollers.py` | `GET /api/oauth/usage` (Sources §3.5) | `account_quotas` (`source: "claude_api"`) or `poll_errors` + `state/quota/claude` |
+| **Codex poller** — `src/codex_quota_api_poller.py` | Same LaunchAgent tick | app-server `account/rateLimits/read` + `account/usage/read` (Sources §4.3) | codex `account_quotas` (`source: "codex_app_server"`) or `poll_errors` |
+| **Codex plan-history poller** — `src/codex_plan_history_poller.py` | Same LaunchAgent tick | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | codex `account_quotas` (`source: "codex_plan_limit_history"`) or `poll_errors` |
+| **Telemetry receiver** — `src/telemetry_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `telemetry` (`source: "claude_otel"`, §9) |
+| **Transcript reader** — `src/transcript_reader.py` | Its own LaunchAgent, every 5 min | Claude Code transcripts `~/.claude/projects/**/*.jsonl` (Sources §3.4) | `requests` + `scans` (§10) |
+| **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | Displays its own stdin reading; writes nothing of ours |
 
 ### 1.2 What each writer captures, by unit
 
@@ -67,16 +75,18 @@ Two kinds of file in total, easy to conflate:
 | Codex poller | ✅ 5h + 7d, account-wide, whole numbers, full raw response | ✅ account-wide daily buckets + lifetime total | ❌ |
 | Telemetry receiver | ❌ | ✅ **per API request**, per model, with `query_source` — including the requests transcripts never record — from 2026-09-30 | ✅ per request, list price |
 | Codex plan-history poller | ✅ finished 5h + 7d windows of the last 7 days, **fractional** (basis points), with their real start and end, full raw response — from 2026-09-30 | ❌ | ❌ |
+| Transcript reader | ❌ | ✅ **per API request**, per model, with session, execution folder and entrypoint — every request a transcript records, back to the oldest transcript kept (365 days) | ✅ per request, list price (`usage_db.PRICES`, exact, Sources §3.4) |
 
 ### 1.3 When each writer actually writes
 
 | Writer | Writes a history row when | Skips when |
 |---|---|---|
 | Claude push | The render's stdin has `rate_limits` **and** the transcript's last 256 KB contain an `assistant` entry to date it (`observed_at`). Deduplicated per session since 2026-10-04: an account row only when `(observed_at, percents, resets)` differs from this session's last one, a session row only when `(session_cost_usd, prompt_cache, model_id)` does. A new API response with unchanged percents still adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no `assistant` entry in that window: then **nothing** is written, state file included; a re-render of a reading this session already wrote |
-| Claude poller | Every 120 s (every second tick) while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. A failed attempt goes to `logs/claude-poll-errors.jsonl`, not `data/`. | Mac asleep (launchd fires once on wake) |
+| Claude poller | Every 120 s (every second tick) while any Claude status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old. A failed attempt goes to `poll_errors`. | Mac asleep (launchd fires once on wake) |
 | Codex poller | Every tick while a Codex status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old | **Any Codex session file changed in the last 5 min** — the session file is then the fresher source (Sources §4.1); Mac asleep |
 | Telemetry receiver | Whenever a Claude session started after the install sends a batch (every few seconds while requests happen), interactive **and** `claude -p` | Receiver down (Claude Code drops the batch, no disk buffer); sessions started before the install |
-| Codex plan-history poller | 24 h after its last successful attempt, 1 h after a failed one. A failed attempt goes to `logs/codex-poll-errors.jsonl`, not `data/`. | Mac asleep; independent of the Codex poller's skip rules |
+| Transcript reader | Every 5 min; a request once its first transcript line is ≥ 15 min old (a request's lines span ≤ 292 s), each `request_id` once | Nothing new since the last run (a byte offset per file); Mac asleep |
+| Codex plan-history poller | 24 h after its last successful attempt, 1 h after a failed one. A failed attempt goes to `poll_errors`. | Mac asleep; independent of the Codex poller's skip rules |
 
 Coverage that follows from this:
 
@@ -85,28 +95,28 @@ Coverage that follows from this:
 | Interactive session, messages flowing | Push, each new reading | Nothing in our log — the session file has it |
 | Session open, no message sent yet | Push (stdin has `rate_limits` from startup, Sources §3.1) | Poller, every 60 s |
 | No status line anywhere | Poller, every 5 min | Poller, every 5 min |
-| Headless `claude -p` / `codex exec` | Per-request tokens and $ via telemetry; quota only through the next reading's meter movement | Only through the next reading's meter movement |
+| Headless `claude -p`, Agent SDK runs | Per-request tokens and $ via the transcript reader (and telemetry when the session loads `~/.claude/settings.json`); quota only through the next reading's meter movement | Only through the next reading's meter movement |
 | Usage on other machines / clients | Next reading's meter movement | Next reading, plus `dailyUsageBuckets` |
 
 ---
 
-## 2. `data/claude/account.jsonl` and `data/claude/<session-id>.jsonl`
+## 2. Claude rows: `account_quotas` and `session_snapshots`
 
-`account.jsonl` holds every Claude meter reading: push rows and poller rows, disambiguated by `source`. It is the continuation of the pre-2026-09-30 `data/claude-quota-history.jsonl` (32.6 MB, 113,002 lines over 30 days as of 2026-09-29 **[verified]**), migrated row for row: every row that carried no session field is **byte-identical** to the original. **Account rows still come in several shapes** (§2.1 push rows, §2.2 poller rows and their older formats) — readers must still sniff the shape.
+The JSON shapes below are what the `raw` column holds. `account_quotas` holds every Claude meter reading: push rows and poller rows, disambiguated by `source`, with typed columns extracted (`five_hour_pct`, `five_hour_resets_ts`, `seven_day_pct`, `seven_day_resets_ts`, `observed_by_session`, `written_ts` = the old `ts`). It continues `data/claude/account.jsonl` (172,389 lines on 2026-10-08, migrated verbatim) and, before 2026-09-30, `data/claude-quota-history.jsonl`. **Rows still come in several shapes** (§2.1 push rows, §2.2 poller rows and their older formats) — readers of `raw` must sniff the shape; the typed columns already do.
 
-Session files hold the push path's session rows (§2.1) and the telemetry receiver's per-request rows (§9), one file per Claude `session_id`.
+`session_snapshots` holds the push path's session rows (§2.1), keyed by `session_id` (a column: the old files carried it in their name only). Telemetry rows (§9) are in `telemetry`.
 
 ### 2.1 Push rows — `source: "claude_statusline"`
 
-About 89% of account rows **[verified]**. From 2026-09-30, every render that writes an account row also writes a session row to the rendering session's own file (when its `session_id` is a plain UUID-like token), with the same `observed_at`:
+About 89% of account rows **[verified]**. From 2026-09-30, every render that writes an account row also writes a session row for the rendering session (when its `session_id` is a plain UUID-like token), with the same `observed_at`:
 
 ```json
-account.jsonl:
+account_quotas.raw:
 {"ts": 1790774229, "iso": "2026-09-30T13:17:09Z", "source": "claude_statusline", "observed_at": 1790773293,
  "five_hour_pct": 50, "seven_day_pct": 9, "five_hour_resets_at": "1790784600", "seven_day_resets_at": "1791226800",
  "observed_by_session": "8b301a30-..."}
 
-8b301a30-....jsonl:
+session_snapshots.raw (session_id 8b301a30-...):
 {"ts": 1790774229, "iso": "2026-09-30T13:17:09Z", "source": "claude_statusline", "observed_at": 1790773293,
  "model_id": "claude-haiku-4-5-20251001", "session_cost_usd": 0.0360382, "prompt_cache": {"warm": true, "requests": 2, "misses": 0, ...}}
 ```
@@ -155,9 +165,9 @@ Session rows exist only from the 2026-09-29/30 deploys: rows written before carr
 
 ---
 
-## 3. `data/codex/account.jsonl`
+## 3. Codex rows: `account_quotas` in `data/codex/account_quotas.db`
 
-The continuation of the pre-2026-09-30 `data/codex-quota-history.jsonl` (13.4 MB, 4,006 lines over 24 days as of 2026-09-29, ~3,349 bytes/line **[verified]**), migrated **byte-identical**. Two writers, disambiguated by `source`. Every row is account-scope; there are no Codex session files.
+The JSON shapes below are what `raw` holds. It continues `data/codex/account.jsonl` (6,884 lines on 2026-10-08, migrated verbatim) and, before 2026-09-30, `data/codex-quota-history.jsonl`. Two writers, disambiguated by `source`. The typed columns map `primary` / `secondary` by `windowDurationMins` (300 → five_hour, 10080 → seven_day); plan-history rows have no current reading, so their percent columns are NULL and the `latest` view skips them.
 
 ### 3.1 Poller rows — `source: "codex_app_server"`
 
@@ -209,9 +219,9 @@ Only **finished** windows appear, and only windows that had usage. Each fetch ov
 
 Not history; one line, overwritten; fields separated by the ASCII FS character (`\034`).
 
-`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Both Claude writers compare their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `claude_statusline` (push) or `claude_api` (poller), the same names as the rows' `source`; information only: agent-statusline reads the file whatever the source. Until 2026-10-04 it was `X` / `P`, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
+`state/quota/claude` (this project's) has six fields: `five_pct, five_reset, week_pct, week_reset, source, observed_at`, resets as epoch seconds. Written only by the account gate, for every new Claude reading; it is the `latest` view of `account_quotas.db` kept as a file, because agent-statusline (every render), auto-apply and smart-orchestrator read it. The gate compares their reading's `observed_at` with the stored one and overwrite only if newer, so the freshest reading wins regardless of write order and every open session converges on the same number. Percentages are **rounded** here, because the display does integer arithmetic. `source` is `claude_statusline` (push) or `claude_api` (poller), the same names as the rows' `source`; information only: agent-statusline reads the file whatever the source. Until 2026-10-04 it was `X` / `P`, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
 
-`~/opt/agent-statusline/state/quota/codex` (agent-statusline's, listed for completeness) has **four** fields: `five_pct, five_reset, week_pct, week_reset`, with the resets as the TUI's display strings (e.g. `16:05`, `11:05 on 28 Sep`), not epochs, and no `source` or `observed_at`. It is written only by the Codex status line, at most once per 60 s, with freshness tracked in a sidecar `state/quota/codex.timestamp` file rather than by comparing readings. agent-statusline's `state/heartbeat/{claude,codex}` are touched on every render; this project's pollers read their mtime to tell a status line is live.
+`~/opt/agent-statusline/state/quota/codex` (agent-statusline's, listed for completeness; absent on 2026-10-08) had **four** fields: `five_pct, five_reset, week_pct, week_reset`, with the resets as the TUI's display strings (e.g. `16:05`, `11:05 on 28 Sep`), not epochs, and no `source` or `observed_at`. It is written only by the Codex status line, at most once per 60 s, with freshness tracked in a sidecar `state/quota/codex.timestamp` file rather than by comparing readings. agent-statusline's `state/heartbeat/{claude,codex}` are touched on every render; this project's pollers read their mtime to tell a status line is live.
 
 ---
 
@@ -253,15 +263,15 @@ The Codex poller deliberately skips while a session file is fresh (§1.3), so th
 
 ### 5.6 No schema version
 
-Both account files carry several row shapes (§2.2's older formats, §2.1's added fields, §3's two sources), migrated as-is rather than normalised. Readers must sniff the shape; a missing key means "older row", never zero.
+The `raw` column of both account databases carries several row shapes (§2.2's older formats, §2.1's added fields, §3's two sources), migrated as-is rather than normalised. Readers must sniff the shape; a missing key means "older row", never zero.
 
 ---
 
-### 5.7 Listing session files, and retention
+### 5.7 Recent data, and retention
 
-- **Any glob over `data/<agent>/*.jsonl` must exclude `account.jsonl` explicitly** — it shares the directory with the session files.
-- A session file is named by its session id only; its time span is in its rows. To find recent sessions, **filter by file mtime** (a file is appended to while its session is active) instead of listing and reading every file.
-- **Retention: none — session files are kept indefinitely**, like the account files. This month of data is the only evidence base this repository and its consumers have, and files are small (≈ 156 Claude sessions a month, most a few hundred KB). Revisit if `data/claude/` passes ~1 GB.
+- **Recent rows: filter on `ts`** (indexed in every table) instead of scanning. The latest Claude reading is `SELECT * FROM latest`.
+- **Per-folder usage: read `usage_5m`** (or `usage_requests`), not `requests` alone: only the views add the requests telemetry sees and transcripts never record (prompt suggestions, compaction, web search, titles: about 4.6% of USD), and prefer Claude Code's own cost to the price table. A slot is `final` once it ended before the last scan's `complete_through_ts`; until then, requests younger than 15 min are still missing.
+- **Retention: none — rows are kept indefinitely.** Revisit if `data/claude/` passes ~1 GB (it was 178 MB after the migration).
 
 ## 6. Change history
 
@@ -285,6 +295,8 @@ Both account files carry several row shapes (§2.2's older formats, §2.1's adde
 | 2026-10-04 | Claude poller polls every 120 s instead of every 60 s tick while a status line is on screen | At 60 s the endpoint refused every other request with a 429 and `Retry-After: 0` (358 of 778 polls on 2026-10-03/04), so poller error rows should drop sharply while the number of successful readings stays about the same |
 | **2026-10-04** | **Poller `source` values say what they read**: `"claude"` → `"claude_api"` (`GET /api/oauth/usage`), `"codex"` → `"codex_app_server"` (`codex app-server` JSON-RPC), and the latest-reading file's source → `claude_api` / `claude_statusline`. Existing rows renamed in place by `adhoc_quotas_analysis/rename_sources.py` (only the `source` value changes; originals in `data/_archive/*.pre-rename`) | Readers match the new names only: no row in `data/` or the error logs carries `"claude"` or `"codex"` any more. `claude_statusline` and `codex_plan_limit_history` are unchanged |
 | **2026-10-04** | **Failed poll attempts leave `data/`.** All three pollers write a failed attempt to `logs/claude-poll-errors.jsonl` / `logs/codex-poll-errors.jsonl` instead of `account.jsonl`. The existing error rows were moved there, byte-identical, by `adhoc_quotas_analysis/split_errors.py`; the original account files are in `data/_archive/` | Readers of `data/` no longer filter `error != null`: every row there is a reading. Row counts in `data/` drop accordingly (Claude poller rows by about two thirds) |
+| **2026-10-07** | **Claude plan upgraded from Pro to Max 5x** (about 16:51Z). Not a change in what is captured: the same fields, sources and files. The 7-day meter dropped from 60% to 0% mid-window (`claude_api` row at 2026-10-07T16:51:04Z; `seven_day` still resets 2026-10-12) | **A Claude percent after this point is not comparable to one before it**: 1% now stands for about 5× as many tokens. Split any percent series, budget or %-to-tokens conversion at 2026-10-07T16:51Z. `adhoc_quotas_analysis/CONCLUSIONS.md` numbers are Pro-only. Tokens and USD are unaffected. `~/.claude.json` still said `organizationType: claude_pro` right after the upgrade |
+| **2026-10-08** | **JSONL files → SQLite databases, one gate per database.** `data/<agent>/account.jsonl` and `logs/<agent>-poll-errors.jsonl` → `data/<agent>/account_quotas.db` (`account_quotas`, `poll_errors`); `data/claude/<session-id>.jsonl` → `data/claude/sessions_usages.db` (`session_snapshots`, `telemetry`). Migrated by `adhoc_quotas_analysis/migrate_to_sqlite.py` through the gates: 228,838 lines, 228,544 distinct, every distinct line found again by its hash, 0 rejected, a second run inserted nothing; originals in `data/_archive/pre-sqlite-20261008T090432Z/` plus a `.tar.gz` of `data/`, `logs/`, `state/`. New: the transcript reader (`requests`, `scans`; backfill 416 files, 969 MB, 18,151 requests in 12.4 s) and the views `latest`, `usage_requests`, `usage_5m`. Pollers renamed (`claude_quota_api_poller.py`, `codex_quota_api_poller.py`, `codex_plan_history_poller.py`, `run_pollers.py`), the receiver to `telemetry_receiver.py`; `state/ingest/` and `state/poll/` dropped (the databases answer those questions) | Every row is still there, its JSON verbatim in `raw`; readers switch from files to `SELECT raw ... ORDER BY rowid` (as `adhoc_quotas_analysis/account_rows.py` and agent-quota-maximizer's `s1_ingest.py` do). `quota_model.py` printed the same output from the databases as from the JSONL. The 294 exact duplicate lines collapse to one row each. `ts` is now when a reading was true (`observed_at` for push rows); the old `ts` is `written_ts`. `state/quota/claude` is unchanged and written by the account gate |
 
 ---
 
@@ -297,7 +309,7 @@ From Sources §2, the data that exists nowhere else and that we do not record ye
 | Codex usage per day × model × client, relative | Backend analytics (Sources §4.4) | The only per-client split; relative only |
 | Claude quota status beyond the percent (`status`, `representative-claim`, overage) | `/v1/messages` headers (Sources §3.6) | Only reachable through a billed request of our own |
 
-Deliberately not captured because it already persists elsewhere: Claude per-message and per-session tokens and spend (transcripts, including `cost-state`), Codex per-turn and per-session tokens and quota (session files).
+Deliberately not captured because it already persists elsewhere: Codex per-turn and per-session tokens and quota (session files; to be read like Claude's transcripts, `TODO.md` step 7). Claude's per-request tokens and spend are captured since 2026-10-08 (§10), because the execution folder and the interactive flag are needed per 5-minute slot.
 
 ---
 
@@ -305,20 +317,22 @@ Deliberately not captured because it already persists elsewhere: Claude per-mess
 
 | Claim | How |
 |---|---|
-| Row shapes and counts | `python3 -c "import json,collections;c=collections.Counter(tuple(sorted(json.loads(l))) for l in open('data/claude/account.jsonl'));print(c.most_common())"` |
-| Poller failure rate | Count rows in `logs/<agent>-poll-errors.jsonl` against rows of that `source` in `data/<agent>/account.jsonl` |
+| Row shapes and counts | `python3 -c "import sqlite3,json,collections;d=sqlite3.connect('data/claude/account_quotas.db');print(collections.Counter(tuple(sorted(json.loads(r))) for (r,) in d.execute('SELECT raw FROM account_quotas')).most_common())"` |
+| Poller failure rate | `SELECT source, COUNT(*) FROM poll_errors GROUP BY source` against the same in `account_quotas` |
+| Nothing lost in the 2026-10-08 migration | `python3 adhoc_quotas_analysis/migrate_to_sqlite.py --logs data/_archive/pre-sqlite-20261008T090432Z/logs` after copying the archived JSONL back into a scratch runtime (`--runtime`): every line must be found, 0 inserted |
 | Envelope compression | Apply `quota_model.py`'s `envelope()` and compare row counts |
-| Fractional percent | Scan `five_hour_pct`, `seven_day_pct`, `api.*.utilization`, `usedPercent` for non-integers |
-| Writer behaviour | `bash tests/run.sh`; `tests/test_ingest_claude_statusline.sh` covers the push path, `tests/test_split_by_scope.sh` the migration |
-| Scope rule holds | For every `data/<agent>/*.jsonl` except `account.jsonl`, no key path matching `pct\|percent\|utiliz\|basis_points`; no `account.jsonl` row with `session_cost_usd`, `prompt_cache` or a bare `session_id` |
+| Fractional percent | `SELECT COUNT(*) FROM account_quotas WHERE five_hour_pct != CAST(five_hour_pct AS INT)` |
+| Writer behaviour | `bash tests/run.sh`: `test_ingest_claude_statusline.sh` (push path), `test_account_gate.sh` and `test_session_gate.sh` (the gates and views), `test_transcript_reader.sh`, `test_migrate_to_sqlite.sh` |
+| Scope rule holds | No percent-like key path (`pct\|percent\|utiliz\|basis_points`) in any `raw` of `sessions_usages.db`; no `account_quotas.raw` with `session_cost_usd`, `prompt_cache` or a bare `session_id`. Both gates refuse such rows |
+| Transcript totals are exact | `python3 adhoc_quotas_analysis/verify_token_costs.py` (USAGE_DATA_SOURCES.md §3.4) |
 
 When any of this changes, update this file and its "Last verified" line.
 
 ---
 
-## 9. Telemetry rows in `data/claude/<session-id>.jsonl`
+## 9. Telemetry rows: `telemetry` in `data/claude/sessions_usages.db`
 
-One row per Claude API request (and per API error / refusal / exhausted retry), from 2026-09-30, appended to the file of the session that made it (`attributes["session.id"]`), next to that session's push rows. Rows are tagged `source: "claude_otel"`, with `observed_at` = the event time in epoch seconds (the join key). Events without a usable session id go to `data/_unattributed/claude-otel.jsonl`. Written by `src/telemetry/otlp_receiver.py`, a local receiver on `127.0.0.1:4318` run by the `com.jeanlescut.agent-usage-tracker.otel` LaunchAgent. Nothing polls: Claude Code sends the events itself, because `install.sh` adds these keys to the `env` object of `~/.claude/settings.json` (`src/telemetry/claude_telemetry_env.json`; `uninstall.sh` removes them again):
+One row per Claude API request (and per API error / refusal / exhausted retry), from 2026-09-30, with typed columns (`ts` = event time, `event`, `session_id`, `request_id`, `model`, `query_source`, the four token counts, `cost_usd`, `received_ts`) and the JSON below in `raw`, tagged `source: "claude_otel"`. Events without a usable session id are kept with `session_id` NULL (until 2026-10-08: `data/_unattributed/claude-otel.jsonl`; there were none). A batch Claude Code re-sends is stored again (its `received_at` differs), so count requests through `usage_requests`, which takes one event per `request_id`. Written through the sessions gate by `src/telemetry_receiver.py`, a local receiver on `127.0.0.1:4318` run by the `com.jeanlescut.agent-usage-tracker.otel` LaunchAgent. Nothing polls: Claude Code sends the events itself, because `install.sh` adds these keys to the `env` object of `~/.claude/settings.json` (`src/claude_telemetry_env.json`; `uninstall.sh` removes them again):
 
 ```text
 CLAUDE_CODE_ENABLE_TELEMETRY=1            OTEL_LOGS_EXPORTER=otlp      OTEL_METRICS_EXPORTER=none
@@ -352,4 +366,28 @@ Only sessions started after those keys were written send events. If the receiver
 What it shows that nothing else does **[verified 2026-09-30, one interactive session]**: the four `api_request` events summed to exactly the session's `cost-state` (1,267 / 286 / 94,492 / 11,946 tokens, $0.0360382), while the transcript held only the two `repl_main_thread` requests — `generate_session_title` and `prompt_suggestion` exist only here. A headless call's single event matched its `-p` result to the dollar ($0.0210743).
 
 Attribution attributes include the account's `user.email`; the file stays local, like everything else under `data/`.
+
+---
+
+## 10. Transcript requests: `requests` in `data/claude/sessions_usages.db`, and the views
+
+One row per Claude API request found in a transcript (`~/.claude/projects/**/*.jsonl`, subagents included), from 2026-10-08, back to the oldest transcript kept. Written through the sessions gate by `src/transcript_reader.py`, every 5 minutes. No `raw`: the transcripts are the raw material, and the table can be rebuilt from them.
+
+| Column | Meaning |
+|---|---|
+| `ts`, `dt` | The request's first transcript line |
+| `request_id` | `requestId` (else `message.id`); UNIQUE, so a resumed session's copied requests are skipped |
+| `machine` | Short hostname |
+| `session_id`, `folder`, `entrypoint` | `sessionId`, `cwd` (the execution folder), `entrypoint` (`cli` = interactive; `sdk-cli`, `sdk-py`, … = headless) |
+| `model` | `message.model` |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | From the request's line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output; the first line undercounts output about 2×) |
+| `usd` | List price from `usage_db.PRICES`; NULL for a model not in the table |
+
+A request is stored once it is complete: when its first line is ≥ 15 min old (its lines span ≤ 292 s, measured 2026-10-08). Each run adds a `scans` row; its `complete_through_ts` (run time − 15 min) means every request that started earlier is in the table.
+
+| View | One row per | Use |
+|---|---|---|
+| `latest` (account database) | — | The freshest reading by `ts`, whatever wrote it |
+| `usage_requests` | API request, once | Transcript requests with `usd` from telemetry's `cost_usd` when present (`usd_from = 'telemetry'`), else the price table; plus the requests only telemetry has (`seen_in = 'telemetry'`), placed in their session's folder |
+| `usage_5m` | 5-minute slot × folder × `interactive` | `requests`, `usd` and token sums; `final` = the slot ended before the last scan's `complete_through_ts` |
 

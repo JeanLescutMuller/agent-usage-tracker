@@ -24,7 +24,8 @@ import statistics
 import numpy as np
 from scipy.optimize import nnls
 
-QUOTA_DIR = os.path.expanduser('~/opt/agent-usage-tracker/data')
+from account_rows import account_lines
+
 MIN_PCT = 5
 PROMO_END = dt.datetime(2026, 9, 1, 6, 59, tzinfo=dt.timezone.utc).timestamp()  # Claude +50% weekly promo end
 
@@ -148,7 +149,7 @@ print(f'CLAUDE: {len(l_ev)} unique priced messages {fmt(a_ts[0])} -> {fmt(a_ts[-
 
 # --- readings (poll + statusline push), same normalisation as window_gaps.py
 l_r5, l_r7 = [], []
-for line in open(f'{QUOTA_DIR}/claude/account.jsonl'):
+for line in account_lines('claude'):
     d_row = json.loads(line)
     if d_row.get('source') == 'claude_statusline':
         ts = d_row['ts']
@@ -319,7 +320,7 @@ l_x5, l_x7 = [], []
 for ts, _, _, p5, e5, p7, e7 in l_cx:
     l_x5.append((ts, p5, e5))
     l_x7.append((ts, p7, e7))
-for line in open(f'{QUOTA_DIR}/codex/account.jsonl'):
+for line in account_lines('codex'):
     d_row = json.loads(line)
     if not d_row.get('codex_rate_limits'):
         continue
@@ -369,7 +370,7 @@ for name, l_w in (('Claude 5h', [w for w in l_c5 if w['end'] > PROMO_END - 30 * 
 # ============================================================================================
 # Windows = envelope clusters with usage > 0 (0% readings can be the idle rolling-countdown placeholder).
 print('\n=== Codex window timing ===')
-n_idle_polls = sum(1 for line in open(f'{QUOTA_DIR}/codex/account.jsonl')
+n_idle_polls = sum(1 for line in account_lines('codex')
                    if (d_row := json.loads(line)).get('codex_rate_limits')
                    and abs(d_row['codex_rate_limits']['rateLimits']['primary']['resetsAt'] - d_row['ts'] - 18000) < 300
                    and d_row['codex_rate_limits']['rateLimits']['primary']['usedPercent'] == 0)
@@ -396,14 +397,14 @@ for name, l_r, span in (('5h', l_x5, 18000), ('7d', l_x7, 604800)):
 # ============================================================================================
 print('\n=== 5h window across a natural 7d reset ===')
 l_claude = []
-for line in open(f'{QUOTA_DIR}/claude/account.jsonl'):
+for line in account_lines('claude'):
     d_row = json.loads(line)
     if d_row.get('source') != 'claude_statusline' and d_row.get('api') and d_row['api'].get('five_hour'):
         d_f, d_s = d_row['api']['five_hour'], d_row['api']['seven_day']
         l_claude.append((d_row['ts'], d_f['utilization'], to_epoch(d_f['resets_at']) if d_f['resets_at'] else 0,
                          d_s['utilization'], to_epoch(d_s['resets_at']) if d_s['resets_at'] else 0))
 l_codex = [(e[0], e[3], e[4], e[5], e[6]) for e in l_cx]
-for line in open(f'{QUOTA_DIR}/codex/account.jsonl'):
+for line in account_lines('codex'):
     d_row = json.loads(line)
     if d_row.get('codex_rate_limits'):
         d_rl = d_row['codex_rate_limits']['rateLimits']

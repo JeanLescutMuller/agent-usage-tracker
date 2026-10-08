@@ -11,7 +11,7 @@ Every test is hermetic: a temp `$HOME`, fixture transcripts and payloads, monkey
 
 ## What's intentionally not covered
 
-- Live API calls and the real macOS Keychain read (`poll_claude.py`'s `fetch_token`, the pollers' real requests) - re-verified by hand, see `USAGE_DATA_REFERENCE.md` §8.
+- Live API calls and the real macOS Keychain read (`claude_quota_api_poller.py`'s `fetch_token`, the pollers' real requests) - re-verified by hand, see `USAGE_DATA_REFERENCE.md` §8.
 - agent-statusline. Its side of the contract (piping the payload in, reading the state file back) is tested in that repo against a stub of this one.
 
 ## Files
@@ -19,12 +19,15 @@ Every test is hermetic: a temp `$HOME`, fixture transcripts and payloads, monkey
 | File | Covers |
 |---|---|
 | `harness.sh` | The assert helpers every test file sources |
-| `test_ingest_claude_statusline.sh` | `bin/ingest-claude-statusline.sh` fed built payloads: account row (unrounded percents, `observed_by_session`, no cost), session row (cost, model, raw `prompt_cache`, never a percent), `observed_at` from the transcript including the DST regression, the `state/quota/claude` freshness-compared write (tag `X`), unsafe session ids, a non-JSON payload |
-| `test_quota_common.sh` | `src/quota_polling/_quota_common.py`'s `write_state_if_newer` - the Python-side mirror of the ingest script's state-file writer |
-| `test_poll_claude.sh` | `poll_claude.py`'s `fetch_usage` error handling - every transport failure (including `RemoteDisconnected`) becomes an error row instead of crashing the run |
-| `test_poll_codex_plan_history.sh` | `poll_codex_plan_history.py` - the raw row it logs, its 24h / 1h-retry cadence, error rows, and that the bearer token never reaches the log; fake `auth.json` |
-| `test_otlp_receiver.sh` | `src/telemetry/otlp_receiver.py` on a free local port: usage events kept and flattened, prompt/tool events dropped, protobuf / malformed / metrics requests answered without writing, localhost-only bind |
+| `test_ingest_claude_statusline.sh` | `bin/ingest-claude-statusline.sh` and `statusline_payload_reader.py` fed built payloads: account row (unrounded percents, `observed_by_session`, no cost), session snapshot (cost, model, raw `prompt_cache`, never a percent), `observed_at` from the transcript including the DST regression, per-session dedup in the database, the `state/quota/claude` freshness-compared write, unsafe session ids, a non-JSON payload, and that the reading is stored before the script returns (real time) |
+| `test_account_gate.sh` | `ingest_account_quota.py`: typed columns, `raw` verbatim, duplicate / redundant / rejected rows, `poll_errors`, the `latest` view, Codex window mapping, the state-file writer (newest wins, rounding, empty resets), idempotency |
+| `test_session_gate.sh` | `ingest_session_usage.py`: snapshot dedup, percent keys rejected, requests once per id, and the views `usage_requests` (telemetry cost wins, telemetry-only requests, a re-sent event counted once) and `usage_5m` (`final`) |
+| `test_transcript_reader.sh` | `transcript_reader.py` on fixture transcripts with a faked clock: largest-output line, the 15-min rule, resumed copies, incremental offsets, half-written lines, unknown models |
+| `test_poll_claude.sh` | `claude_quota_api_poller.py`: `fetch_usage` error handling (every transport failure becomes a failed-attempt row instead of crashing the run), the watched / idle cadence and Retry-After read back from the database, where each outcome is stored |
+| `test_codex_plan_history_poller.sh` | `codex_plan_history_poller.py` - the raw row it stores, its 24h / 1h-retry cadence read from the database, failed attempts, and that the bearer token never reaches the database; fake `auth.json` |
+| `test_telemetry_receiver.sh` | `telemetry_receiver.py` on a free local port: usage events kept and flattened into the `telemetry` table, prompt/tool events dropped, protobuf / malformed / metrics requests answered without writing, a re-sent batch, localhost-only bind |
+| `test_migrate_to_sqlite.sh` | `adhoc_quotas_analysis/migrate_to_sqlite.py`: every line lands verbatim, idempotent re-run, `--archive`, nothing archived on failure |
 | `test_split_by_scope.sh` | `adhoc_quotas_analysis/split_by_scope.py` on a fixture with every historical row shape: counts reconcile, untouched rows byte-identical, no percent in session files, idempotent re-run, in-progress marker |
 | `test_install.sh` | `install.sh` and `uninstall.sh` - what is deployed where, symlinked plists, idempotency, the `env` merge and unmerge, `data/` preserved, orphan reporting |
 | `test_utils.sh` | `utils.sh` |
-| `test_repo_hygiene.sh` | `bash -n` and `py_compile` on everything, shellcheck if installed, and the boundary with agent-statusline |
+| `test_repo_hygiene.sh` | `bash -n` and `py_compile` on everything, shellcheck if installed, only the gates write to a database, and the boundary with agent-statusline |

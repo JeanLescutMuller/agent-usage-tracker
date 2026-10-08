@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fetches Codex's plan-limit history from the ChatGPT backend about once a
-day and appends the raw response to data/codex/account.jsonl, tagged
-`source: "codex_plan_limit_history"`.
+"""Collector: fetches Codex's plan-limit history from the ChatGPT backend
+about once a day and hands the raw response to ingest_account_quota.py
+(data/codex/account_quotas.db), tagged `source: "codex_plan_limit_history"`.
 
 Why: it is the only sub-percent quota source for either agent. Each
 finished 5-hour / 7-day window comes back with `used_basis_points`
@@ -16,15 +16,13 @@ Codex itself uses from ~/.codex/auth.json. Read-only; the token is never
 logged. Codex refreshes that token when it runs; if it has expired, the
 row records the HTTP 401 and the next attempt retries.
 
-Cadence: the LaunchAgent ticks every 60s (via poll_all.py), but this only
-calls the backend when the last attempt is SUCCESS_INTERVAL_SECONDS old
-after a success, or RETRY_INTERVAL_SECONDS old after a failure. The last
-attempt is tracked in a small state file rather than read back from the log,
-because the log's 16KB tail (_quota_common.tail_json_rows) holds only ~5 of
-the ~3KB rows poll_codex.py writes every minute.
+Cadence: the LaunchAgent ticks every 60s (via run_pollers.py), but this
+only calls the backend when the last attempt (read back from the database,
+reading or failure) is SUCCESS_INTERVAL_SECONDS old after a success, or
+RETRY_INTERVAL_SECONDS old after a failure.
 
-Existing readers of data/codex/account.jsonl key on `codex_rate_limits` or
-on `source == "codex"`, so these rows are skipped by them, not misparsed.
+These rows carry no current reading, so their percent columns are NULL and
+the `latest` view skips them.
 """
 import json
 import time
@@ -32,15 +30,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-import _quota_common
+import ingest_account_quota
+import usage_db
 
-# Deployed at ~/opt/agent-usage-tracker/src/quota_polling/ - three parents up
-# is the runtime root holding data/ and state/ (same as poll_codex.py).
-RUNTIME_DIR = Path(__file__).resolve().parent.parent.parent
-QUOTA_LOG_FILE = RUNTIME_DIR / "data" / "codex" / "account.jsonl"  # percent-bearing, so account scope
-# Failed attempts, kept out of data/ (see _quota_common.append_poll_row).
-ERROR_LOG_FILE = RUNTIME_DIR / "logs" / "codex-poll-errors.jsonl"
-STATE_FILE = RUNTIME_DIR / "state" / "poll" / "codex_plan_limit_history"
 AUTH_FILE = Path.home() / ".codex" / "auth.json"
 URL = "https://chatgpt.com/backend-api/wham/usage/plan_limit_history?days=7"
 
@@ -82,17 +74,12 @@ def fetch_plan_history() -> tuple[dict | None, dict | None]:
 
 def main() -> None:
     now = time.time()
-
-    # State file: {"ts": <last attempt epoch>, "ok": <bool>}. Missing or
-    # unreadable means "never attempted" - fetch now.
-    try:
-        d_state = json.loads(STATE_FILE.read_text())
-        interval = SUCCESS_INTERVAL_SECONDS if d_state["ok"] else RETRY_INTERVAL_SECONDS
-        if now - d_state["ts"] < interval:
+    d_last = ingest_account_quota.last_attempt(usage_db.open_account("codex", readonly=True), ("codex_plan_limit_history",))
+    if d_last is not None:
+        interval = SUCCESS_INTERVAL_SECONDS if d_last["error"] is None else RETRY_INTERVAL_SECONDS
+        if now - d_last["ts"] < interval:
             print(f"skip: last plan-history attempt is under {interval}s old")
             return
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
 
     d_history, d_error = fetch_plan_history()
     d_record = {
@@ -102,10 +89,7 @@ def main() -> None:
         "plan_limit_history": d_history,  # full raw response, unfiltered
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
-    _quota_common.append_poll_row(d_record, QUOTA_LOG_FILE, ERROR_LOG_FILE)
-
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({"ts": d_record["ts"], "ok": d_error is None}))
+    ingest_account_quota.add_row(usage_db.open_account("codex"), "codex", d_record)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
 # adhoc_quotas_analysis — deep-dive notes
 
+> **2026-10-08: the data moved from JSONL files to SQLite databases** (`data/<agent>/account_quotas.db`, `data/claude/sessions_usages.db`), and the scripts were renamed: `poll_claude.py` → `../src/claude_quota_api_poller.py`, `poll_codex.py` → `codex_quota_api_poller.py`, `poll_codex_plan_history.py` → `codex_plan_history_poller.py`, `poll_all.py` → `run_pollers.py`, `otlp_receiver.py` → `telemetry_receiver.py`, all flat under `../src/`. Wherever this file says `account.jsonl` or a session file, read the `raw` column of the matching table (`account_rows.py` here yields it); every old line is there verbatim. See `../USAGE_DATA_REFERENCE.md` §1 and §6.
+
 > **2026-09-30: this directory moved to its own repo, `agent-usage-tracker`**, split back out of `agent-statusline` together with the pollers, the telemetry receiver and the usage-data docs. Paths below are updated; where older text still says "`agent-statusline`" or "the parent repo", read `agent-usage-tracker` for anything about usage tracking. The status line itself (`providers/`, the heartbeat files, `state/quota/codex`) stays in `agent-statusline`; the push script `src/statusline/push-claude-quota.sh` is now `../bin/ingest-claude-statusline.sh`, fed the raw statusline payload on stdin. See the repo root's `README.md` ("Contract with agent-statusline").
 
 This file (`AGENTS.md`, the cross-agent-tool convention — `CLAUDE.md` is a

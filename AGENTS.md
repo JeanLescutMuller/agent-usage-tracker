@@ -12,15 +12,18 @@ agent-usage-tracker/
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, when, and where it lands
 │                                 # Other projects link to these rather than restating them. Keep them tested and dated.
 ├── bin/
-│   └── ingest-claude-statusline.sh  # the statusline's entry point: raw payload on stdin -> account row, session row, state/quota/claude (source "statusline")
-├── src/
-│   ├── quota_polling/            # LaunchAgent-scheduled, deployed, unattended
-│   │   ├── poll_all.py                          # the LaunchAgent entry point, runs each poller as a subprocess
-│   │   ├── poll_claude.py / poll_codex.py       # per-agent meter pollers
-│   │   ├── poll_codex_plan_history.py           # daily Codex plan_limit_history fetch (fractional per-window history)
-│   │   ├── _quota_common.py                     # log tail, heartbeat freshness, state-file writer (mirrors the ingest script's)
-│   │   └── com.jeanlescut.agent-usage-tracker.plist.template
-│   └── telemetry/                # local OTLP receiver + its KeepAlive LaunchAgent; merge_claude_env.py owns the telemetry keys in ~/.claude/settings.json's `env`
+│   └── ingest-claude-statusline.sh  # the statusline's entry point (path = contract): runs src/statusline_payload_reader.py, foreground, python -S
+├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
+│   ├── usage_db.py                              # database paths, schema (tables + views), connect(), verified price table
+│   ├── ingest_account_quota.py                  # GATE: only writer of data/<agent>/account_quotas.db (+ state/quota/claude)
+│   ├── ingest_session_usage.py                  # GATE: only writer of data/<agent>/sessions_usages.db
+│   ├── statusline_payload_reader.py             # collector: statusline payload -> both gates
+│   ├── claude_quota_api_poller.py / codex_quota_api_poller.py / codex_plan_history_poller.py  # collectors: meter pollers
+│   ├── run_pollers.py                           # the pollers' LaunchAgent entry point, runs each as a subprocess
+│   ├── telemetry_receiver.py                    # collector: local OTLP receiver (KeepAlive LaunchAgent)
+│   ├── transcript_reader.py                     # collector: ~/.claude/projects transcripts -> requests, every 5 min
+│   ├── merge_claude_env.py + claude_telemetry_env.json  # run from the repo: owns the telemetry keys in ~/.claude/settings.json's `env`
+│   └── launchd/                                 # the three LaunchAgent templates
 ├── adhoc_quotas_analysis/        # research, run by hand, never deployed - see its own AGENTS.md (the deep-dive: investigation, findings, gotchas, naming history)
 ├── tests/                        # hermetic bash test suite, see tests/README.md
 └── TODO.md                       # parked gaps
@@ -28,10 +31,12 @@ agent-usage-tracker/
 
 ## Rules
 
-- **Percent is account-scope only.** A session file (`data/<agent>/<session-id>.jsonl`) never carries a quota percent under any name; an account row never carries per-session cost or tokens. `USAGE_DATA_REFERENCE.md` §1 states it for downstream readers. Nothing here estimates a per-session percent.
-- **Never rewrite history.** The data files are append-only raw material. A layout change moves files and, if rows must change, uses a one-time, idempotent, hand-run migration in `adhoc_quotas_analysis/` that archives the originals (`split_by_scope.py` is the pattern).
-- **Keep the contract with agent-statusline small** (README.md's "Contract with agent-statusline"): the ingest script takes the raw payload and picks its own fields; it must always exit 0 and never print anything the statusline would need. The state file's six-field format and the heartbeat path are shared with that repo - changing either is a change in both. Nothing here sources or runs agent-statusline code (enforced by `tests/test_repo_hygiene.sh`).
-- **Writers append one line per `write()`** with `O_APPEND`, so concurrent writers (every open Claude session, the pollers, the receiver) never interleave.
+- **Percent is account-scope only.** `sessions_usages.db` never carries a quota percent under any name; `account_quotas.db` never carries per-session cost or tokens. The sessions gate rejects a percent-like key anywhere in a row. `USAGE_DATA_REFERENCE.md` §1 states it for downstream readers. Nothing here estimates a per-session percent.
+- **Only the gates write.** `ingest_account_quota.py` and `ingest_session_usage.py` are the only code that inserts into a database; collectors build a row and hand it over. Data-changing SQL anywhere else under `src/` or `bin/` fails `tests/test_repo_hygiene.sh`.
+- **Never rewrite history.** Every table is insert-only; `row_hash` (or `request_id`) makes re-inserting the same row a no-op. Rows keep their JSON verbatim in `raw`. A layout change uses a one-time, idempotent, hand-run migration in `adhoc_quotas_analysis/` that archives the originals (`migrate_to_sqlite.py` is the latest pattern).
+- **Keep the contract with agent-statusline small** (README.md's "Contract with agent-statusline"): the ingest script takes the raw payload and picks its own fields; it must always exit 0 and never print anything the statusline would need. The state file's six-field format and the heartbeat path are shared with that repo (and the state file is also read by auto-apply and smart-orchestrator) - changing either is a change in all of them. Nothing here sources or runs agent-statusline code (enforced by `tests/test_repo_hygiene.sh`).
+- **Concurrent writers** (every open Claude session's statusline, the pollers, the receiver, the transcript reader) are handled by SQLite: WAL mode and a busy timeout (`usage_db.connect`). Keep each write short.
+- **Readers open with `PRAGMA query_only = ON`, never a `mode=ro` URI**: macOS's system SQLite intermittently refuses a mode=ro open of a WAL database whose `-shm` file no connection holds at that instant.
 - **Every doc change to what is captured goes into `USAGE_DATA_REFERENCE.md`**, with a dated change-history row (§6) and its "Last verified" line updated.
 
 ## Install/uninstall

@@ -6,7 +6,7 @@ It does **not** cover how percentages convert into dollars beyond the constants 
 
 Markers: **[tested]** was exercised live on this machine; **[verified]** was measured on existing data on this machine; **[source]** was read in upstream source code (`openai/codex` at commit `a5cce88`, 2026-09-30) but not exercised; **[docs]** comes from official documentation. Anything else is inference and says so.
 
-*Last tested: 2026-09-30, Claude Code 2.1.284, codex-cli 0.154.0, Claude Pro and ChatGPT Plus accounts.*
+*Last tested: 2026-09-30, Claude Code 2.1.284, codex-cli 0.154.0, Claude Pro and ChatGPT Plus accounts. Transcript and Codex session token totals and the Claude price table re-verified 2026-10-07 against telemetry and ccusage 20.0.26 (§3.4, §4.1).*
 
 ---
 
@@ -130,12 +130,22 @@ The object itself is not written anywhere, but **its content is**: the session's
 
 `~/.claude/projects/<project>/<session-uuid>.jsonl`, one file per session; subagent transcripts under `<session-uuid>/subagents/` **[verified]**. 156 files, 517 MB, median 604 KB as of 2026-09-29 **[verified]**. Interactive sessions carry `"entrypoint": "cli"`, headless ones `"sdk-cli"` **[verified]**. Three record kinds matter:
 
-**Assistant messages — per-request tokens.** `message.model` and `message.usage` (`input_tokens`, `output_tokens`, `output_tokens_details.thinking_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` split into `ephemeral_5m` / `ephemeral_1h`, `service_tier`, `speed`) **[verified]**. One message is written as several lines sharing the same `usage`; **dedup by `message.id`, keep the last**. Cost is computable:
+**Assistant messages — per-request tokens.** `message.model` and `message.usage` (`input_tokens`, `output_tokens`, `output_tokens_details.thinking_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` split into `ephemeral_5m` / `ephemeral_1h`, `service_tier`, `speed`) **[verified]**. One request is written as several lines sharing one `requestId`, and `output_tokens` grows from line to line: **dedup by `requestId` (fall back to `message.id`) across all files, keeping the line with the largest `output_tokens`** **[verified]**. Keeping the first line undercounts output about 2× (319 K vs 639 K tokens in 2026-07); deduplicating per file double-counts resumed sessions, which copy earlier requests into their new file. Cost is computable:
 
 ```text
-price ($/MTok):  opus 5/25 · sonnet 2/10 · haiku 1/5
-cost = in×pin + out×pout + cache_read×pin×0.1 + cache_write_5m×pin×1.25 + cache_write_1h×pin×2
+price ($/MTok in/out, cache-read ratio):  opus-5 5/25 ×0.1 · opus-5-5 4/20 ×0.05 · sonnet-5, sonnet-5-5 2/10 ×0.1 · haiku-4-5 1/5 ×0.1
+cost = in×pin + out×pout + cache_read×pin×ratio + cache_write_5m×pin×1.25 + cache_write_1h×pin×2
 ```
+
+**Tokens and USD from transcripts are proven exact [verified 2026-10-07].** `adhoc_quotas_analysis/verify_token_costs.py` re-runs all three checks, read-only:
+
+| Check | Result |
+|---|---|
+| Transcript tokens vs telemetry `api_request` (§3.7), same `request_id` | 2,163 requests, **0 mismatches** |
+| Price table above × transcript tokens vs Claude Code's own `cost_usd` | **0.000% median error** for every model; Opus 5.5: 3 of 1,470 requests off, −0.15% in total |
+| Monthly tokens and USD per model vs `npx ccusage@20.0.26 monthly --mode calculate --breakdown` | **Identical to the token and the cent** for every month and model, 2026-07 → 2026-10 (the running month only differs by usage after ccusage ran) |
+
+Opus 5.5's price differs from Opus 5's: $4/$20 with cache reads at 0.05× input, fitted from telemetry and then confirmed by ccusage. Sonnet 5 had no telemetry; ccusage confirms $2/$10. **What transcripts alone miss:** the requests below, 4.6% of USD over 2026-09-30 → 10-07 ($14.82 of $324.12): `prompt_suggestion` $10.62, `compact` $3.21, `web_search_tool` $0.70, `web_fetch_apply` $0.16, `away_summary` $0.12, `generate_session_title` $0.02. ccusage reads only transcripts, so it undercounts USD by the same share; only telemetry has these requests.
 
 **Assistant messages do not cover every request.** In the tested interactive session, the two recorded messages summed to 20 input / 101 output / 58,777 cache-read / 11,919 cache-write tokens, while the same session's `cost-state` counted 1,267 / 365 / 94,178 / 11,968 **[tested]**. Computed from the messages, the cost is ≈ $0.030 against $0.0364 in `cost-state` — about 17% of the spend is not in the messages. OpenTelemetry (§3.7) identified them in a second interactive session: **session-title generation (`generate_session_title`) and prompt suggestions (`prompt_suggestion`)** **[tested]**.
 
@@ -158,6 +168,8 @@ It has no timestamp of its own; `startTime + totalDuration` dates it.
 ### 3.5 `GET /api/oauth/usage` — the metadata endpoint
 
 Authenticated with the Claude Code OAuth token from the macOS Keychain. Returns `five_hour` / `seven_day` (and several always-`null` model- or product-specific windows), each with `utilization`, `resets_at`, and `limit_dollars` / `used_dollars` / `remaining_dollars` that are **always `null`**, plus an `extra_usage` object (disabled on this account) **[verified]**. `utilization` is a whole number: 0 fractional among 11,314 values **[verified]**. Unreliable: about 21% of calls got HTTP 429, and more failed on network errors (`adhoc_quotas_analysis/AGENTS.md`). No tokens, no dollars.
+
+**`seven_day_breakdown`** (present since 2026-09-14, already in every poller row's raw `api`) splits the 7-day meter by product: `rows[]` of `{key, display_name, percent}` with keys `claude_code`, `chat`, `cowork`, `other`, plus `as_of` and `window_started_at` **[verified 2026-10-08]**. It is the only account-wide signal of usage outside Claude Code (web and app chats, Cowork). Every reading so far has `claude_code` at 100% and the others at 0. It does not say which machine or whether a Claude Code session ran locally or in the cloud. Re-checked 2026-10-08 after the Max 5x upgrade: the `*_dollars` fields are still `null` and `spend` (usage credits beyond the plan limits) is disabled with `used` 0: **no account-wide token or dollar figure exists for a Claude subscription**.
 
 ### 3.6 `POST /v1/messages` response headers — the real quota source
 
@@ -214,7 +226,8 @@ Tested on an interactive session too **[tested 2026-09-30]**: four `api_request`
 
 - `total_token_usage` is cumulative for the thread and repeats unchanged when nothing happened — **skip consecutive repeats**. `last_token_usage` is that turn alone.
 - `used_percent` is a float in the core protocol **[source]** but whole-valued in all 4,952 readings **[verified]**.
-- No model per turn in `token_count`, no cost.
+- No model per turn in `token_count`, no cost. The model comes from the preceding `turn_context` record's `payload.model`; ccusage reports `codex-auto-review` as `gpt-5.6-luna`.
+- `total_token_usage` can **reset** within a file (3 times by 2026-10-07): a delta from the previous event goes negative. Use that event's `last_token_usage` instead. With this, monthly tokens per model match ccusage 20.0.26 exactly for 2026-08 → 2026-10 **[verified 2026-10-07]**, `adhoc_quotas_analysis/verify_token_costs.py`.
 - Our own runs are identified by `session_meta.cwd`, set with `codex exec -C <dir>` **[verified]**.
 
 ### 4.2 Inside the TUI — what a status line could be given
@@ -294,6 +307,7 @@ Observed 09-07 19:20, 09-15 09:14, 09-19 11:24, then **04:13 and 09:05 for the s
 |---|---|
 | Statusline stdin content | Run `claude --settings <file>` with a `statusLine` whose command is `cat > dump-$(date +%s%N).json`, send a message, read the dumps |
 | `-p` result vs transcript | `claude -p "Reply with: ok" --model claude-haiku-4-5-20251001 --output-format json`, then compare with the `cost-state` record in `~/.claude/projects/*/<session_id>.jsonl` (≈ $0.02) |
+| Transcript tokens and USD exact; ccusage agrees | `python3 adhoc_quotas_analysis/verify_token_costs.py` (refresh its ccusage reference with a new `npx ccusage@latest monthly --mode calculate --breakdown` run) |
 | Transcripts missing requests | Sum deduplicated assistant `usage` in one interactive transcript and compare with its last `cost-state` |
 | `/v1/messages` headers | `ANTHROPIC_LOG=debug claude -p ...` and grep `anthropic-ratelimit-unified` in stdout |
 | OpenTelemetry content | `CLAUDE_CODE_ENABLE_TELEMETRY=1 OTEL_METRICS_EXPORTER=console OTEL_LOGS_EXPORTER=console claude -p ... < /dev/null` |

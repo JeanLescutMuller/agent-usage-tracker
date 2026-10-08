@@ -7,6 +7,7 @@ This file is the reference model for `~/dev/agent-quota-maximizer/`. Section 1 i
 - **Reproduce:** every number comes from two read-only scripts in this directory. `python3 window_gaps.py` covers Claude window timing, and `python3 quota_model.py` covers the budgets, conversions and Codex window timing. Neither makes a network call.
 - **Data:** Claude readings from 2026-08-24 to 2026-09-21 (poll plus statusline-push rows in `data/claude-quota-history.jsonl`) and 13,776 unique local Claude Code messages. Codex polls from 2026-08-30 to 2026-09-21 and 2,452 local `token_count` events from 2026-08-27 to 2026-09-16.
 - **Plans:** Claude Pro (`organizationType: claude_pro`) and ChatGPT Plus for Codex (`planType: plus`). The numbers below are specific to these plans.
+- **Claude plan changed on 2026-10-07 (about 16:51Z): Pro → Max 5x.** Every Claude percent budget and %-to-tokens/USD conversion below is for Pro and must not be applied to readings after that point; 1% of Max 5x is roughly 5× larger. Not re-measured yet.
 - **USD:** always means API-equivalent cost at public list prices, never a billed amount. Neither provider reports a dollar figure for subscription quotas (section 4.4).
 
 ## 1. Cheat sheet
@@ -167,7 +168,7 @@ Two models are given. The single-USD model is the simpler one ($0.32 per 1%, sec
 | Cache write, 1 h | 80 K | 45 K | 32 K | 160 K |
 | Cache read | 1.6 M | 4.1 M | 640 K | 3.2 M |
 
-- **Pricing used:** Sonnet 5 costs $2/$10 per million tokens in/out, Opus 5 $5/$25 (2.5× Sonnet) and Haiku 4.5 $1/$5 (half of Sonnet). Cache writes cost 1.25× (5 min) or 2× (1 h) base input, and cache reads 0.1×.
+- **Pricing used:** Sonnet 5 costs $2/$10 per million tokens in/out, Opus 5 $5/$25 (2.5× Sonnet) and Haiku 4.5 $1/$5 (half of Sonnet). Cache writes cost 1.25× (5 min) or 2× (1 h) base input, and cache reads 0.1×. Opus 5.5 (from 2026-09) is $4/$20 with cache reads at 0.05×; this table and the full price list are verified against Claude Code's own per-request cost and ccusage in `../USAGE_DATA_SOURCES.md` §3.4.
 - **Category model for other models:** divide the Sonnet category-model figures by 2.5 for Opus, or multiply them by 2 for Haiku.
 - **Where the spend goes** (since 08-24, list-price USD): cache read 58.9%, cache write 26.5% (1-hour writes 24.3%), output 14.6%, input about 0%. By token count, cache reads are 97.3% of all tokens. By model: Sonnet 89%, Opus 11%, Haiku 0%.
 

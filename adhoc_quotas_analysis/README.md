@@ -1,5 +1,7 @@
 # quota tracking
 
+> **2026-10-08:** the JSONL files and script names below are historical: the data is now in SQLite databases and the pollers were renamed - see `AGENTS.md`'s first note and `../USAGE_DATA_REFERENCE.md` §1.
+
 > **2026-09-30: this directory moved to its own repo, `agent-usage-tracker`**, split back out of `agent-statusline` together with the pollers, the telemetry receiver and the usage-data docs. Paths below are updated; where older text still says "`agent-statusline`" or "the parent repo", read `agent-usage-tracker` for anything about usage tracking. The status line itself (`providers/`, the heartbeat files, `state/quota/codex`) stays in `agent-statusline`; the push script `src/statusline/push-claude-quota.sh` is now `../bin/ingest-claude-statusline.sh`, fed the raw statusline payload on stdin. See the repo root's `README.md` ("Contract with agent-statusline").
 
 Part of `agent-statusline` since 2026-08-31 (folded in from the former
