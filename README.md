@@ -6,7 +6,7 @@ Split out of [`agent-statusline`](https://github.com/JeanLescutMuller/agent-stat
 
 ## Usage data documentation
 
-Two canonical files, which downstream projects (`agent-quota-maximizer`) link to instead of restating them:
+Two canonical files, which downstream projects link to instead of restating them (how to read the data safely: `FOR_READERS.md`):
 
 - `USAGE_DATA_SOURCES.md` — **what usage data exists upstream**, independent of this repo: every Claude and Codex source (transcripts, status-line stdin, APIs, OpenTelemetry, the ChatGPT backend), each unit (quota percent / tokens / USD) at each granularity, tested live, plus what is not available anywhere.
 - `USAGE_DATA_REFERENCE.md` — **what this repo captures**: which writer records what, when, from which source, into which file, with which shape, and the traps consumers must handle.

@@ -39,16 +39,7 @@ data/
 
 **Reading: open the database normally and run `PRAGMA query_only = ON`, not a `mode=ro` URI.** macOS's system SQLite intermittently refuses a mode=ro open of these WAL databases ("unable to open database file") when no connection holds the `-shm` file at that instant, which is most of the time [verified 2026-10-08].
 
-**Reading only the new rows: by `rowid`, never by `ts` or `written_ts`.** A row is often written well after its `ts`, so a reader that remembers "the largest `ts` I have seen" silently skips it. Remember the largest `rowid` instead and read `WHERE rowid > ?`: every table is insert-only, so `rowid` only grows, in write order. Rows that arrive late today:
-
-| Rows | Written after their `ts` by | Since |
-|---|---|---|
-| `claude_statusline` readings | up to the session's idle time: `ts` is the session's last API response, written at its next render | 2026-09-30 |
-| Readings copied between the Mac and the VM (`--peer`) | minutes; they also keep the other machine's `written_ts` | 2026-10-10 |
-| `requests` | 15 min or more: a request is stored once its first line is 15 min old (§10) | 2026-10-08 |
-| Target design (`design/TARGET_SPEC.md`): every reading from the other machine, synced every 2 min | up to about 2 min | not built yet |
-
-Example: a reader polls at 10:00:00 and remembers `ts` 09:59:50. At 10:01 the sync brings the VM's reading of 09:59:30: `ts > 09:59:50` misses it forever, `rowid > 4812` finds it. agent-quota-maximizer's `release/aqm/s1_ingest.py` reads with `ts > ? OR written_ts > ?` and must switch (`design/TARGET_SPEC.md` P11).
+**Reading only the new rows: by `rowid`, never by `ts` or `written_ts`**: many rows are written well after their `ts`. Why, which rows, and every other rule for readers: `FOR_READERS.md`.
 
 **The scope rule — percent is account-scope only.** The quota meter is one account-level number: when two sessions spend at once, there is no per-session percentage — not a hidden one, an undefined one. So:
 

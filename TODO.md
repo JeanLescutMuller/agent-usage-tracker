@@ -6,10 +6,9 @@ The whole target (Claude only, four categories of data) is specified in `design/
 
 | # | Next | State |
 |---|---|---|
-| 1 | Write the migration plan from `design/TARGET_SPEC.md` (its section 11 lists the data to move) | next |
+| 1 | Validate the migration plan, `design/MIGRATION_PLAN.md` (written from `design/TARGET_SPEC.md` §11) | draft written 2026-10-10 |
 | 2 | Build it, in the plan's order | after 1 |
-| 3 | agent-quota-maximizer: read new rows by `rowid` (`release/aqm/s1_ingest.py`; `USAGE_DATA_REFERENCE.md` §1) | with 2 |
-| 4 | Parked: who runs the transcript reader on the VM (the maximizer's own job, eventually) | — |
+| 3 | Parked: who runs the transcript reader on the VM | — |
 
 ## Usage per project and per kind of use (development / test runs / scheduled runs)
 

@@ -9,7 +9,7 @@ Words used here, as defined with the user:
 | Category 1 · Quotas | the account's quota readings (5-hour and 7-day %), raw; the same rows on both machines, synced every 2 min |
 | Category 2 · Machine raw | `sessions_usages.db` + Claude Code's transcripts; never leaves its machine |
 | Category 3 · Aggregates | `aggregates.db`, one table `slots`; the Mac sends its rows to the VM every 5 min |
-| Category 4 · Meta-analysis | built by the quota maximizer (another project), not here |
+| Category 4 · Meta-analysis | built by a reader (another project), not here: `FOR_READERS.md` |
 | intermediary | the local working tables between Category 2 and Category 3; never sent, deletable, rebuilt from Category 2 |
 | 5-min slot | a 5-minute interval starting at a multiple of 300 s (e.g. 19:10:00–19:14:59 UTC) |
 | final slot | a slot every request of which is already counted: it ended more than 15 min before the last read of the transcripts |
@@ -30,7 +30,7 @@ The details below the design were proposed by the agent and each accepted by the
 | P8 | `slots` gets a 6th token column, `cache_write_unknown_tokens`, for telemetry-only requests (telemetry gives no 5m / 1h split) | 6.1 |
 | P9 | On the VM, the old `central/<machine>/` folders move whole to `central/_archive/` (that move is the backup); `central/chan-lescut-macbook-pro/` restarts with only `aggregates.db` | 6.4 |
 | P10 | A new gate, `ingest_aggregates.py`, is the only writer of `aggregates.db` (the Mac's own, and the VM's copy of it) | 6.3 |
-| P11 | Readers that read new rows incrementally use `rowid`, never `ts` or `written_ts`: synced rows arrive up to 2 min after their time | 7.3 |
+| P11 | Readers that read new rows incrementally use `rowid`, never `ts` or `written_ts`: synced rows arrive up to 2 min after their time; documented in `FOR_READERS.md` | 7.3 |
 | P12 | Jobs: `transcripts` and `push` are replaced by one job `aggregates`; their names are decommissioned on job-runner's dashboard | 8 |
 
 ## 1. The picture
@@ -50,7 +50,7 @@ The details below the design were proposed by the agent and each accepted by the
  │ CAT 3  data/claude/aggregates.db (slots) ─── new final slots, every 5 min ──▶ central/chan-lescut-macbook-pro/data/claude/aggregates.db │
  │                                                      │   │ CAT 3  data/claude/aggregates.db (the VM's slots)   │
  └──────────────────────────────────────────────────────┘   │                                                      │
-                                                            │ CAT 4  the quota maximizer reads Categories 1 + 3   │
+                                                            │ CAT 4  readers (FOR_READERS.md) use Categories 1+3  │
                                                             └──────────────────────────────────────────────────────┘
 ```
 
@@ -218,9 +218,9 @@ The only writer of any `aggregates.db`. Checks each row (columns, types, no perc
 
 `runner/limits.py` reads `SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, ts FROM latest` from `account_quotas.db` (opened with `PRAGMA query_only = ON`, never `mode=ro`) instead of `state/quota/claude`. Its own "a passed reset counts as 0" stays harmless.
 
-### 7.3 agent-quota-maximizer (P11)
+### 7.3 Every other reader (P11)
 
-It reads `account_quotas.db`'s `raw` (`release/aqm/s1_ingest.py`): the new `machine` column changes nothing for it. But its incremental read (`WHERE ts > ? OR written_ts > ?`) would miss synced rows, which arrive up to 2 min after their `ts` and `written_ts`: it must use `rowid > ?`. Its Category 4 reads `slots` from `data/claude/aggregates.db` and `central/*/data/claude/aggregates.db` on the VM.
+`FOR_READERS.md` (written 2026-10-10) is the readers' contract: read-only opening, new rows by `rowid` (synced rows arrive up to 2 min after their `ts` and `written_ts`), what to read today and once built, and in which phase each changes. agent-quota-maximizer will be decommissioned soon (the user, 2026-10-10): it gets no change.
 
 ### 7.4 job-runner
 
@@ -260,7 +260,7 @@ Mac: 4 jobs + 1 service (today 5 + 1). VM: 2 jobs + 1 service (today 3 + 1).
 | `install.sh` / `uninstall.sh` | jobs list; reader's first line; `intermediary/`; old triggers removed |
 | `tests/` | per change; hygiene test: three gates + `transcript_reader.py` for `intermediary/` |
 | `README.md`, `USAGE_DATA_REFERENCE.md` (§6 row, "Last verified"), `AGENTS.md` (layout, rules), `TODO.md` | |
-| other repos | agent-statusline provider + its tests; auto-apply `limits.py`; agent-quota-maximizer `s1_ingest.py` (rowid); job-runner dashboard conf |
+| other repos | agent-statusline provider + its tests; auto-apply `limits.py`; job-runner dashboard conf |
 
 ## 11. Data to migrate (inputs to the migration plan, not the plan)
 
