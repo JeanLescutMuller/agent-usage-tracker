@@ -9,7 +9,7 @@ Status: **validated by the user on 2026-10-10; not started.** The target is `des
 | **Category 1 writers never stop for more than seconds.** The statusline reader writes on every render throughout; a job is paused only when the other machine keeps polling | a quota reading not taken is lost for good (the API has no history) |
 | **The telemetry receiver is never stopped by hand.** `install.sh` restarts it (≈ 1 s, as on every deploy today); `uninstall.sh` is **not** used: it stops the receiver, removes the telemetry settings from `~/.claude/settings.json` and deletes all of `state/` | Claude Code drops telemetry it cannot deliver |
 | Old jobs are removed by a migration step that unloads only their trigger | the repo's usual `uninstall.sh` + `install.sh` would break the two rules above |
-| Every data change is a one-time, idempotent, hand-run step of `adhoc_quotas_analysis/migrate_to_target.py` (pattern of `merge_machine_names.py`): it archives what it changes first, prints counts before/after, logs to `adhoc_quotas_analysis/logs/migrate_to_target.log` | "never rewrite history"; re-running a step changes nothing |
+| Every data change is a one-time, idempotent, hand-run step of `adhoc_quotas_analysis/migrate_to_target.py` (pattern of `merge_machine_names.py`): it archives what it changes first, prints counts before/after, logs to `<runtime>/data/_archive/migrate_to_target.log` (the VM's `~/dev` checkout is overwritten by every rsync) | "never rewrite history"; re-running a step changes nothing |
 | An existing database gets a schema change only through that script, which also sets `PRAGMA user_version = 2` | `usage_db.connect()` applies the schema only to a new database |
 | Each phase = one commit, `bash tests/run.sh` green, deployed **Mac first, then the VM** (`install.sh`; VM: rsync + `install.sh`), checked, before the next phase | a problem stays one phase wide |
 | A phase is undone by: redeploying the previous commit (`install.sh`), and restoring the archive the phase's steps wrote | each phase lists its own undo |
@@ -30,10 +30,12 @@ Phases 1 to 3 are best done the same day: between them the VM receives the Mac's
 
 ## Phase 0 · Prepare (no change in behaviour)
 
+**Done 2026-10-10** (commit below): backups `data/_archive/pre-target-20261010T210110Z.tar.gz` (Mac, 4 databases, 30.6 MB) and `pre-target-20261010T210128Z.tar.gz` (VM, 10 databases, 31.1 MB), every copy `integrity_check` ok; deployed Mac then VM; rows still written by the new gates on both (Mac 177,363 → 177,367, VM 548 → 549 by its own poll).
+
 | # | Where | Step |
 |---|---|---|
-| 0.1 | Mac, VM | `migrate_to_target.py backup`: tar of `data/` and `state/` (VM: also `central/`) into `data/_archive/pre-target-<stamp>.tar.gz` / `central/_archive/` |
-| 0.2 | code | The gates name their columns in every `INSERT` (today `account_quotas` gets `VALUES (?,…11)`, which would fail the moment a 12th column exists); `uninstall.sh`'s job list follows `install.sh`'s |
+| 0.1 | Mac, VM | `migrate_to_target.py backup`: every database copied with SQLite's backup API (they are written meanwhile) and checked, plus the other files of `data/`, `state/`, `central/`, into `data/_archive/pre-target-<stamp>.tar.gz` |
+| 0.2 | code | The gates name their columns in every `INSERT` (today `account_quotas` gets `VALUES (?,…11)`, which would fail the moment a 12th column exists) (already the case: no change) |
 | 0.3 | Mac, VM | deploy |
 
 Check: tests green; `account_quotas` keeps growing on both machines after the deploy (`SELECT COUNT(*)` twice, 2 min apart). Undo: previous commit.
@@ -43,7 +45,7 @@ Check: tests green; `account_quotas` keeps growing on both machines after the de
 | # | Where | Step |
 |---|---|---|
 | 1.1 | Mac | `migrate_to_target.py pause claude-quota`: unloads the Mac's `claude-quota` trigger, so `--peer` stops copying readings. The VM keeps polling at its own thresholds; statusline readings go on on both machines |
-| 1.2 | Mac → VM | `migrate_to_target.py cat1-shared`: compares `row_hash` between the two databases; writes the list of readings present in both (60 on 2026-10-10, more by then) to `adhoc_quotas_analysis/logs/cat1_shared.txt` |
+| 1.2 | Mac → VM | `migrate_to_target.py cat1-shared`: compares `row_hash` between the two databases; writes the list of readings present in both (60 on 2026-10-10, more by then) to `data/_archive/cat1_shared.txt` |
 | 1.3 | Mac, VM | `migrate_to_target.py cat1-machine`: archive, `ALTER TABLE account_quotas ADD COLUMN machine`, fill: this machine's name, except the shared readings → NULL; `user_version = 2` |
 | 1.4 | VM | `migrate_to_target.py cat1-seed-vm`: every row of `central/chan-lescut-macbook-pro/data/claude/account_quotas.db` → `data/claude/account_quotas.db` (`INSERT OR IGNORE`, `machine` = the Mac, shared → NULL) |
 | 1.5 | Mac | write `state/sync/claude_quotas.json`: M = the push watermark of `claude/account_quotas` (every Mac row up to it is in the central copy, hence now in the VM's data), V = 0 (the VM's own rows, 538 today, all go to the Mac) |

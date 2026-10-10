@@ -68,7 +68,8 @@ def add_snapshot(db, session_id: str, d_row: dict, raw: str | None = None, dedup
             return "redundant"
     ts = int(d_row.get("observed_at") or d_row["ts"])
     cur = db.execute(
-        "INSERT OR IGNORE INTO session_snapshots VALUES (?,?,?,?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO session_snapshots (ts, dt, session_id, model_id, session_cost_usd, prompt_cache, written_ts, "
+        "raw, row_hash) VALUES (?,?,?,?,?,?,?,?,?)",
         (ts, usage_db.iso(ts), session_id, d_row.get("model_id"), cost,
          None if prompt_cache is None else json.dumps(prompt_cache), int(d_row["ts"]), raw,
          usage_db.row_hash(raw, session_id)))
@@ -91,7 +92,9 @@ def add_telemetry(db, d_row: dict, raw: str | None = None) -> str:
         return kind(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
     cur = db.execute(
-        "INSERT OR IGNORE INTO telemetry VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO telemetry (ts, dt, event, session_id, request_id, model, query_source, input_tokens, "
+        "output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd, received_ts, raw, row_hash) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (ts, usage_db.iso(ts), d_row.get("event"), session_id if valid_session_id(session_id) else None,
          d_attr.get("request_id"), d_attr.get("model"), d_attr.get("query_source"),
          num("input_tokens", int), num("output_tokens", int), num("cache_read_tokens", int),
@@ -128,7 +131,7 @@ def add_scan(db, ts: int, complete_through_ts: int, requests_added: int) -> str:
     stored once."""
     if db.execute("SELECT 1 FROM scans WHERE ts = ? AND complete_through_ts = ?", (ts, complete_through_ts)).fetchone():
         return "duplicate"
-    db.execute("INSERT INTO scans VALUES (?,?,?,?)", (ts, usage_db.iso(ts), complete_through_ts, requests_added))
+    db.execute("INSERT INTO scans (ts, dt, complete_through_ts, requests_added) VALUES (?,?,?,?)", (ts, usage_db.iso(ts), complete_through_ts, requests_added))
     return "inserted"
 
 

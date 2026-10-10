@@ -150,7 +150,8 @@ def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = T
             raise ValueError(f"unknown {agent} source {source!r}")
         ts = int(d_row["ts"])
         cur = db.execute(
-            "INSERT OR IGNORE INTO poll_errors VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO poll_errors (ts, dt, source, stage, type, status, retry_after_s, raw, row_hash) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (ts, usage_db.iso(ts), source, d_error.get("stage"), d_error.get("type"), d_error.get("status"),
              d_error.get("retry_after_s"), raw, h))
         return "inserted" if cur.rowcount else "duplicate"
@@ -167,7 +168,9 @@ def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = T
         if last is not None and list(last) == l_reading:
             return "redundant"
     cur = db.execute(
-        "INSERT OR IGNORE INTO account_quotas VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        # Columns named, not positional: a column added later (machine, 2026-10) must not break this insert.
+        "INSERT OR IGNORE INTO account_quotas (ts, dt, source, five_hour_pct, five_hour_resets_ts, seven_day_pct, "
+        "seven_day_resets_ts, observed_by_session, written_ts, raw, row_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (d_col["ts"], usage_db.iso(d_col["ts"]), d_col["source"], d_col["five_hour_pct"], d_col["five_hour_resets_ts"],
          d_col["seven_day_pct"], d_col["seven_day_resets_ts"], d_col["observed_by_session"], d_col["written_ts"], raw, h))
     if not cur.rowcount:
