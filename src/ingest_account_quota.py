@@ -15,10 +15,10 @@ the JSON kept verbatim in `raw`. A row is not written when:
     account: two sessions seeing the same reading are two observations.
 A failed poll attempt (`error` set) goes to the poll_errors table instead.
 
-Claude readings also refresh state/quota/claude - six fields separated by
-\\x1c: five_pct five_reset week_pct week_reset source observed_at - when
-newer than what it holds. agent-statusline, auto-apply and the claude-quota
-entrypoint read that file (README.md's "Contract with agent-statusline").
+The account's freshest reading is the `latest` view (the reset rule
+applied), read by statusline_payload_reader.py for agent-statusline, by
+auto-apply and by the claude-quota poller; until 2026-10-10 this gate also
+kept it in a file, state/quota/claude.
 
 Command line (migration, and later the VM push): one JSONL row per stdin
 line, inserted with the line itself as `raw`:
@@ -35,7 +35,6 @@ each (at most SYNC_LIMIT), and last {"inserted", "duplicate", "rejected",
 """
 import json
 import math
-import os
 import re
 import sys
 import time
@@ -50,8 +49,7 @@ SOURCES = {
 }
 # Per-session fields never belong to an account row.
 SESSION_KEYS = {"session_cost_usd", "prompt_cache", "session_id"}
-STATE_FILE = usage_db.RUNTIME_DIR / "state" / "quota" / "claude"
-FIELD_SEP = "\x1c"
+FIELD_SEP = "\x1c"   # between the six fields statusline_payload_reader.py prints
 MACHINE_RE = re.compile(r"[A-Za-z0-9-]+")
 # Rows per direction per sync call: a backlog drains over successive runs.
 SYNC_LIMIT = 20_000
@@ -121,30 +119,7 @@ def _round(pct: float | None) -> int:
     return int(math.floor((pct or 0) + 0.5))
 
 
-def write_state_if_newer(d_col: dict) -> bool:
-    """Refreshes state/quota/claude when this reading is newer than the one
-    it holds (compared on when the reading was true, so write order does not
-    matter). Atomic replace; no lock: a same-instant race can at worst keep a
-    slightly older reading until the next write."""
-    try:
-        existing = int(STATE_FILE.read_text().rstrip("\n").split(FIELD_SEP)[5])
-    except (OSError, ValueError, IndexError):
-        existing = None
-    if existing is not None and d_col["ts"] <= existing:
-        return False
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    line = FIELD_SEP.join([
-        str(_round(d_col["five_hour_pct"])), str(d_col["five_hour_resets_ts"] or ""),
-        str(_round(d_col["seven_day_pct"])), str(d_col["seven_day_resets_ts"] or ""),
-        d_col["source"], str(d_col["ts"]),
-    ])
-    tmp = STATE_FILE.with_name(f"{STATE_FILE.name}.tmp.{os.getpid()}")
-    tmp.write_text(line + "\n")
-    tmp.replace(STATE_FILE)
-    return True
-
-
-def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = True, update_state: bool = True,
+def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = True,
             machine: str | None = None) -> str:
     """Inserts one row; returns "inserted", "duplicate" or "redundant".
     Raises ValueError for a row that must not be stored. `machine`: the
@@ -194,8 +169,6 @@ def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = T
                      list(d_values.values()))
     if not cur.rowcount:
         return "duplicate"
-    if update_state and agent == "claude" and (d_col["five_hour_pct"] is not None or d_col["seven_day_pct"] is not None):
-        write_state_if_newer(d_col)
     return "inserted"
 
 
@@ -260,7 +233,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--agent", required=True, choices=usage_db.AGENTS)
     parser.add_argument("--no-dedup", action="store_true", help="keep repeated statusline readings (history as is)")
-    parser.add_argument("--no-state", action="store_true", help="do not touch state/quota/claude")
     parser.add_argument("--sync-from", metavar="MACHINE", help="the other side of MACHINE's sync (see the docstring)")
     parser.add_argument("--after", type=int, default=0, metavar="ROWID", help="with --sync-from: send own rows above it")
     args = parser.parse_args()
@@ -281,7 +253,7 @@ def main() -> None:
         if not raw.strip():
             continue
         try:
-            d_counts[add_row(db, args.agent, json.loads(raw), raw, not args.no_dedup, not args.no_state)] += 1
+            d_counts[add_row(db, args.agent, json.loads(raw), raw, not args.no_dedup)] += 1
         except (ValueError, KeyError, TypeError) as exc:
             d_counts["rejected"] += 1
             print(f"line {n} rejected: {type(exc).__name__}: {exc}", file=sys.stderr)

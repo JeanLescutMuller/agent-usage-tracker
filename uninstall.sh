@@ -9,7 +9,7 @@
 # copy). Remove them yourself if you really want them gone.
 #
 # With this uninstalled, agent-statusline keeps working: its Claude render
-# finds no ingest script to pipe into and no state/quota/claude to read, and
+# finds no reader to pipe into (src/statusline_payload_reader.py), and
 # falls back to the rate_limits on its own stdin.
 #
 # Anything left under ~/opt/agent-usage-tracker after that is an orphan -
@@ -64,10 +64,9 @@ esac
 
 step "runtime tree ($RUNTIME)"
 if [ -d "$RUNTIME" ]; then
-    # Nothing here is written on every render except state/quota/claude (an
-    # atomic replace) and the databases under data/ (kept), so a plain
-    # rm -rf is enough - no retry loop needed.
-    known_targets="bin src state logs"
+    # Nothing here is written on every render except the databases under
+    # data/ (kept), so a plain rm -rf is enough - no retry loop needed.
+    known_targets="src intermediary state logs"
     for target in $known_targets; do
         rm -rf "${RUNTIME:?}/$target"
     done

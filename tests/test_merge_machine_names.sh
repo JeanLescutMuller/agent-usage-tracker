@@ -21,7 +21,7 @@ import sys; sys.path.insert(0, "$REPO_ROOT/src")
 import ingest_account_quota as a, ingest_session_usage as s, usage_db
 _, machine, req, ts, pct = sys.argv
 db = usage_db.open_account("claude")
-a.add_row(db, "claude", {"ts": int(ts), "source": "claude_api", "api": {"five_hour": {"utilization": float(pct)}}}, update_state=False)
+a.add_row(db, "claude", {"ts": int(ts), "source": "claude_api", "api": {"five_hour": {"utilization": float(pct)}}})
 db.commit()
 db = usage_db.open_sessions("claude")
 s.add_requests(db, [dict(ts=int(ts), dt="x", request_id=req, machine=machine, session_id="s1", folder="/d", entrypoint="cli",

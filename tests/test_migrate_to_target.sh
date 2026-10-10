@@ -61,7 +61,7 @@ from pathlib import Path
 path = Path(sys.argv[1]); path.parent.mkdir(parents=True, exist_ok=True)
 db = usage_db.connect(path, usage_db.ACCOUNT_SCHEMA)
 for ts in sys.argv[2:]:
-    g.add_row(db, "claude", {"ts": int(ts), "source": "claude_api", "api": {"five_hour": {"utilization": 1.0}}}, update_state=False)
+    g.add_row(db, "claude", {"ts": int(ts), "source": "claude_api", "api": {"five_hour": {"utilization": 1.0}}})
 db.execute("DROP VIEW latest")
 db.execute("ALTER TABLE account_quotas DROP COLUMN machine")
 db.execute("CREATE VIEW latest AS SELECT ts FROM account_quotas ORDER BY ts DESC LIMIT 1")
@@ -96,7 +96,7 @@ assert_eq "cat1-machine (VM): its own reading labelled, the shared one NULL" "15
 200	" "$(qq "$VM/data/claude/account_quotas.db" "SELECT ts, machine FROM account_quotas ORDER BY ts")"
 assert_eq "...the central copy labelled by its folder" "100	mac
 200	" "$(qq "$VM/central/mac/data/claude/account_quotas.db" "SELECT ts, machine FROM account_quotas ORDER BY ts")"
-assert_eq "...the latest view names the machine, version 2" "200	2" \
+assert_eq "...the latest view names the machine, the current schema version" "200	3" \
     "$(qq "$VM/data/claude/account_quotas.db" "SELECT (SELECT ts FROM latest), (SELECT user_version FROM pragma_user_version)")"
 assert_eq "...a copy taken before the first change" "2" "$(ls "$VM/data/_archive" | grep -c 'pre-machine')"
 assert_contains "cat1-seed-vm: the Mac's own reading copied, none missing" "$(step "$VM" vm cat1-seed-vm --shared "$SHARED" --from-machine mac)" "1 readings copied"
@@ -172,5 +172,26 @@ assert_contains "the old folder moved whole" "$out" "old-mac: 1 files"
 assert_file_exists "...to _archive/<machine>-push-era" "$C/_archive/old-mac-push-era/data/claude/account_quotas.db"
 assert_file_exists "a folder with only aggregates.db stays" "$C/new-mac/data/claude/aggregates.db"
 assert_contains "re-running moves nothing" "$(python3 "$MIGRATE" archive-central --runtime "$TMP/p3/opt/agent-usage-tracker")" "new-mac: new layout, left as is"
+
+section "phase 4: view-latest"
+P4="$TMP/p4/opt/agent-usage-tracker"
+AGENT_USAGE_TRACKER_RUNTIME="$P4" python3 - <<PY
+import sys, time; sys.path.insert(0, "$REPO_ROOT/src")
+import usage_db
+db = usage_db.open_account("claude")
+db.execute("DROP VIEW latest")
+db.execute("CREATE VIEW latest AS SELECT ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts FROM account_quotas ORDER BY ts DESC LIMIT 1")
+now = int(time.time())
+db.execute("INSERT INTO account_quotas (ts, dt, source, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, written_ts, raw, row_hash, machine) "
+           "VALUES (?, 'x', 'claude_api', 42.0, ?, 18.0, ?, ?, '{}', 'h', 'm1')", (now - 100, now - 10, now + 999, now))
+PY
+assert_contains "the old view replaced: a passed 5h reset reads 0%, no reset" "$(python3 "$MIGRATE" view-latest --runtime "$P4")" "latest recreated, user_version 3; it now reads ('claude_api', 'm1', 0.0, None, 18.0,"
+assert_contains "re-running: unchanged" "$(python3 "$MIGRATE" view-latest --runtime "$P4")" "latest unchanged"
+
+section "phase 4: remove-legacy"
+mkdir -p "$P4/bin" "$P4/state/quota" && touch "$P4/bin/ingest-claude-statusline.sh" "$P4/state/quota/claude"
+assert_contains "bin/ and the state file removed, then the empty folder" "$(python3 "$MIGRATE" remove-legacy --runtime "$P4")" "removed ['bin/', 'state/quota/claude', 'state/quota/']"
+assert_file_exists "the databases untouched" "$P4/data/claude/account_quotas.db"
+assert_contains "re-running: nothing" "$(python3 "$MIGRATE" remove-legacy --runtime "$P4")" "nothing (already gone)"
 
 harness_summary

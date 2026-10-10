@@ -11,11 +11,9 @@ agent-usage-tracker/
 ├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream, in which unit, at which granularity, for both agents
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, when, and where it lands
 │                                 # Other projects link to these rather than restating them. Keep them tested and dated.
-├── bin/
-│   └── ingest-claude-statusline.sh  # the statusline's entry point (path = contract): runs src/statusline_payload_reader.py, foreground, python -S
 ├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
 │   ├── usage_db.py                              # database paths, schema (tables + views), connect(), verified price table
-│   ├── ingest_account_quota.py                  # GATE: only writer of data/<agent>/account_quotas.db (+ state/quota/claude)
+│   ├── ingest_account_quota.py                  # GATE: only writer of data/<agent>/account_quotas.db
 │   ├── ingest_session_usage.py                  # GATE: only writer of data/<agent>/sessions_usages.db
 │   ├── statusline_payload_reader.py             # collector: statusline payload -> both gates
 │   ├── claude_quota_api_poller.py / codex_quota_api_poller.py / codex_plan_history_poller.py  # collectors: meter pollers
@@ -40,7 +38,7 @@ agent-usage-tracker/
 - **Percent is account-scope only.** `sessions_usages.db` never carries a quota percent under any name; `account_quotas.db` never carries per-session cost or tokens. The sessions gate rejects a percent-like key anywhere in a row. `USAGE_DATA_REFERENCE.md` §1 states it for downstream readers. Nothing here estimates a per-session percent.
 - **Only the gates write.** `ingest_account_quota.py`, `ingest_session_usage.py` and `ingest_aggregates.py` are the only code that inserts into a database under `data/`; collectors build a row and hand it over. Exception: `transcript_reader.py` writes `intermediary/` itself (local working tables, never sent, deletable). Data-changing SQL anywhere else under `src/` or `bin/` fails `tests/test_repo_hygiene.sh`.
 - **Never rewrite history.** Every table is insert-only; `row_hash` (or `request_id`) makes re-inserting the same row a no-op. Rows keep their JSON verbatim in `raw`. A layout change uses a one-time, idempotent, hand-run migration in `adhoc_quotas_analysis/` that archives the originals (`migrate_to_sqlite.py` is the latest pattern).
-- **Keep the contract with agent-statusline small** (README.md's "Contract with agent-statusline"): the ingest script takes the raw payload and picks its own fields; it must always exit 0 and never print anything the statusline would need. The state file's six-field format and the heartbeat path are shared with that repo (and the state file is also read by auto-apply and by `jobs/claude-quota.sh`) - changing either is a change in all of them. Nothing here sources or runs agent-statusline code (enforced by `tests/test_repo_hygiene.sh`).
+- **Keep the contract with agent-statusline small** (README.md's "Contract with agent-statusline"): `src/statusline_payload_reader.py` (its path is the contract) takes the raw payload and picks its own fields; it must always exit 0 and print only the six-field line. That line's format and the heartbeat path are shared with that repo, and auto-apply reads the `latest` view - changing either is a change in all of them. Nothing here sources or runs agent-statusline code (enforced by `tests/test_repo_hygiene.sh`).
 - **Concurrent writers** (every open Claude session's statusline, the pollers, the receiver, the transcript reader) are handled by SQLite: WAL mode and a busy timeout (`usage_db.connect`). Keep each write short.
 - **Readers open with `PRAGMA query_only = ON`, never a `mode=ro` URI**: macOS's system SQLite intermittently refuses a mode=ro open of a WAL database whose `-shm` file no connection holds at that instant.
 - **Every doc change to what is captured goes into `USAGE_DATA_REFERENCE.md`**, with a dated change-history row (§6) and its "Last verified" line updated.

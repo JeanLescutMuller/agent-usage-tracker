@@ -37,7 +37,7 @@ assert_eq "URLError stays a network error" "network URLError" \
 
 # poll_once <fetch_usage return expression> -> runs main() with the token
 # and request faked, against a temp runtime; prints "<readings> <failed
-# attempts> <state file source>".
+# attempts> <latest view's source, or none>".
 poll_once() {
     local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/th-poll.XXXXXX")"
     AGENT_USAGE_TRACKER_RUNTIME="$dir" python3 -c "
@@ -54,14 +54,17 @@ import sqlite3
 d = sqlite3.connect('$dir/data/claude/account_quotas.db')
 print(d.execute('SELECT COUNT(*) FROM account_quotas').fetchone()[0], d.execute('SELECT COUNT(*) FROM poll_errors').fetchone()[0], end=' ')
 "
-    cut -d $'\034' -f5 "$dir/state/quota/claude" 2>/dev/null || printf 'none'
+    python3 -c "
+import sqlite3
+row = sqlite3.connect('$dir/data/claude/account_quotas.db').execute('SELECT source FROM latest').fetchone()
+print(row[0] if row else 'none')"
     rm -rf "$dir"
 }
 
-section "a reading goes to account_quotas (and the state file), a failed attempt only to poll_errors"
-assert_eq "success -> one reading, no failed attempt, state file from claude_api" "1 0 claude_api" \
+section "a reading goes to account_quotas, a failed attempt only to poll_errors"
+assert_eq "success -> one reading, no failed attempt, latest from claude_api" "1 0 claude_api" \
     "$(poll_once "({'five_hour': {'utilization': 5, 'resets_at': '2026-10-08T12:00:00Z'}}, {}, None)")"
-assert_eq "429 -> no reading, one failed attempt, no state file" "0 1 none" \
+assert_eq "429 -> no reading, one failed attempt, nothing in latest" "0 1 none" \
     "$(poll_once "(None, None, {'stage': 'http', 'status': 429})")"
 
 # A fake ssh: runs the remote command locally as machine "vm", with
@@ -139,7 +142,6 @@ assert_eq "the Mac got the VM's two, labelled vm, the old one included" "2" "$(l
 assert_eq "the same rows on both sides (row_hash)" "$(peer_db "SELECT group_concat(row_hash) FROM (SELECT row_hash FROM account_quotas ORDER BY row_hash)")" \
     "$(local_db "SELECT group_concat(row_hash) FROM (SELECT row_hash FROM account_quotas ORDER BY row_hash)")"
 assert_eq "the Mac's latest is the VM's fresher reading" "vm	50.0" "$(local_db "SELECT machine, five_hour_pct FROM latest")"
-assert_eq "the state file follows it" "50" "$(cut -d $'\034' -f1 "$LOCAL/state/quota/claude")"
 assert_match "watermarks saved" "$(cat "$LOCAL/state/sync/claude_quotas.json")" '"sent": [0-9]+, "received": [0-9]+, "last_ok_ts": [0-9]+'
 assert_eq "not due yet (110 s): no sync" "10 quota fresh enough (5 s)" \
     "$(poll "$NEVER" --sync-with=vm --sync-every=110 --if-older-than=99999 | sed -E 's/\(-?[0-9]+ s\)/(5 s)/')"

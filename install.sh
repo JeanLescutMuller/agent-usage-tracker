@@ -7,10 +7,10 @@
 # then re-run this script.
 #
 # Deploys, under ~/opt/agent-usage-tracker:
-# - bin/ingest-claude-statusline.sh, the entry point the Claude statusline
-#   (the separate agent-statusline project) pipes its stdin payload into;
-# - src/*.py: the two gates (ingest_*.py, the only writers of the
-#   databases), the collectors, and usage_db.py;
+# - src/*.py: the three gates (ingest_*.py, the only writers of the
+#   databases), the collectors, and usage_db.py; statusline_payload_reader.py
+#   is the executable the Claude statusline (the separate agent-statusline
+#   project) pipes its stdin payload into, and reads a line back from;
 # - the jobs' job-runner entrypoints (<job>.sh, from jobs/) and one trigger
 #   each, com.jeanlescut.agent-usage-tracker.<job>: claude-quota (60s tick),
 #   aggregates (every 5 min), and on macOS only codex-quota (60s)
@@ -160,10 +160,18 @@ mkdir -p "$RUNTIME/data/claude" "$RUNTIME/data/codex" "$RUNTIME/state" "$RUNTIME
 ok "data/, state/, logs/"
 
 step "code"
-_deploy_rendered "$SCRIPT_DIR/bin/ingest-claude-statusline.sh" "$RUNTIME/bin/ingest-claude-statusline.sh"
 for f in "$SCRIPT_DIR"/src/*.py; do
     # The settings merge helper runs from the repo (below), never deployed.
     [ "$(basename "$f")" = merge_claude_env.py ] && continue
+    if [ "$(basename "$f")" = statusline_payload_reader.py ]; then
+        # Run directly by agent-statusline on every render: its first line is this machine's
+        # interpreter (-S: no site-packages, faster), and its MACHINE_NAME is filled in.
+        tmp="$(mktemp)"
+        sed -e "1s|.*|#!$PYTHON3 -S|" "$f" > "$tmp"
+        _deploy_rendered "$tmp" "$RUNTIME/src/$(basename "$f")"
+        rm -f "$tmp"
+        continue
+    fi
     _deploy "$f" "$RUNTIME/src/$(basename "$f")"
 done
 

@@ -71,7 +71,7 @@ for path, agent, kind, session_id in l_inputs:
         try:
             d_row = json.loads(raw)
             if kind == "account":
-                result = ingest_account_quota.add_row(db, agent, d_row, raw, dedup=False, update_state=False)
+                result = ingest_account_quota.add_row(db, agent, d_row, raw, dedup=False)
                 l_hashes.append(("poll_errors" if d_row.get("error") is not None else "account_quotas", usage_db.row_hash(raw)))
             elif d_row.get("source") == "claude_otel":
                 result = ingest_session_usage.add_telemetry(db, d_row, raw)

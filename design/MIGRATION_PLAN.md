@@ -107,6 +107,8 @@ Checks: the VM's `central/chan-lescut-macbook-pro/data/claude/aggregates.db` has
 
 ## Phase 4 · Readers of the quota: statusline, auto-apply; `bin/` and the state file go
 
+**Done 2026-10-10, 22:00 UTC**: `latest` applies the reset rule (both machines); the reader prints the six fields (24 ms per render in all, measured) and runs directly (its first line and machine name written by `install.sh`); agent-statusline `1cd96bd` (only the provider file deployed, by hand, on both machines: its `install.sh` would also have run the Codex patch, which holds someone else's uncommitted changes) and auto-apply `5f4a943` (its own `deploy.sh`) read it; `bin/` and `state/quota/claude` removed on both. Checked: both status lines show the account's reading, auto-apply reads 30% / 38%. One slip: a test without a temp runtime wrote 2 fake readings (machine `t-mac`) into the Mac's real database at 21:53; deleted at once (never synced: not the Mac's own), the state file rewritten; that test file now sets its runtime for every call.
+
 | # | Where | Step |
 |---|---|---|
 | 4.1 | code + Mac, VM | P5: `migrate_to_target.py view-latest` recreates `latest` with the reset rule; P6: the reader prints the 6 fields and becomes executable (`install.sh` writes its first line); `bin/` still present (its output goes to `/dev/null`, so printing changes nothing yet); deploy |

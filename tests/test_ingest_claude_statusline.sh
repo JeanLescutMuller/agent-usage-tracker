@@ -1,25 +1,26 @@
 #!/bin/bash
-# End-to-end tests for bin/ingest-claude-statusline.sh (the path
-# agent-statusline runs) and src/statusline_payload_reader.py behind it: the
-# free path that takes the Claude statusline's raw stdin payload and (1)
-# stores a claude_statusline reading in account_quotas.db plus a session
-# snapshot in sessions_usages.db whenever the transcript gives a precise
-# timestamp (the last assistant entry's), deduplicated per session, and (2)
-# refreshes the "latest known quota" state file (source "claude_statusline")
-# with that same timestamp - and writes nothing at all without one. It runs
-# in the foreground: when the script returns, the reading is stored.
+# End-to-end tests for src/statusline_payload_reader.py (what agent-statusline
+# runs on every Claude render): the free path that takes the statusline's raw
+# stdin payload and (1) stores a claude_statusline reading in
+# account_quotas.db plus a session snapshot in sessions_usages.db whenever the
+# transcript gives a precise timestamp (the last assistant entry's),
+# deduplicated per session - and writes nothing at all without one; then (2)
+# prints the account's freshest reading (the `latest` view: six \034-separated
+# fields), what the status line shows. It runs in the foreground: when it
+# returns, the reading is stored and printed.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 
-INGEST="$REPO_ROOT/bin/ingest-claude-statusline.sh"
-export JR_MACHINE_NAME=t-mac   # this machine's name, as the deployed entry point passes it
+INGEST="$REPO_ROOT/src/statusline_payload_reader.py"
+export JR_MACHINE_NAME=t-mac   # this machine's name, as install.sh writes it into the deployed reader
 SEP=$'\034'
 TH_HOME="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-ingesthome.XXXXXX")"
 trap 'rm -rf "$TH_HOME"' EXIT
+# Every python call of this file writes here, never into the real ~/opt (on 2026-10-10 a call without HOME did).
+export AGENT_USAGE_TRACKER_RUNTIME="$TH_HOME/opt/agent-usage-tracker"
 DATA_DIR="$TH_HOME/opt/agent-usage-tracker/data/claude"
 ADB="$DATA_DIR/account_quotas.db"
 SDB="$DATA_DIR/sessions_usages.db"
-STATE="$TH_HOME/opt/agent-usage-tracker/state/quota/claude"
 TRANSCRIPT="$TH_HOME/transcript.jsonl"
 
 # q <db> <sql> - prints result rows tab-separated; a missing db prints 0.
@@ -35,12 +36,13 @@ all_raw() { q "$ADB" "SELECT raw FROM account_quotas ORDER BY rowid"; }
 last_raw() { q "$ADB" "SELECT raw FROM account_quotas ORDER BY rowid DESC LIMIT 1"; }
 snapshots() { q "$SDB" "SELECT COUNT(*) FROM session_snapshots${1:+ WHERE session_id = '$1'}"; }
 snapshot_raw() { q "$SDB" "SELECT raw FROM session_snapshots WHERE session_id = '$1' ORDER BY rowid DESC LIMIT 1"; }
-reset() { rm -rf "$DATA_DIR" "$STATE"; }
+reset() { rm -rf "$DATA_DIR"; }
 
 # run_push <transcript> <five_pct> <five_reset> <week_pct> <week_reset>
 #          [session_id] [session_cost_usd] [prompt_cache_json] [model_id]
 # Builds the statusline payload those values would arrive in and pipes it
-# into the ingest script. An empty five_pct means "no rate_limits at all".
+# into the reader; TH_OUT is the line it prints. An empty five_pct means
+# "no rate_limits at all".
 run_push() {
     local err_file payload
     payload="$(jq -nc --arg t "$1" --arg f "$2" --arg fr "$3" --arg w "$4" --arg wr "$5" \
@@ -54,7 +56,7 @@ run_push() {
             {rate_limits: {five_hour: {used_percentage: ($f | tonumber), resets_at: ($fr | nullable)},
                            seven_day: {used_percentage: ($w | tonumber), resets_at: ($wr | nullable)}}} end)')"
     err_file="$(mktemp "${TMPDIR:-/tmp}/th-err.XXXXXX")"
-    TH_OUT="$(printf '%s' "$payload" | HOME="$TH_HOME" bash "$INGEST" 2>"$err_file")"
+    TH_OUT="$(printf '%s' "$payload" | python3 "$INGEST" 2>"$err_file")"
     TH_STATUS=$?
     TH_ERR="$(cat "$err_file")"
     rm -f "$err_file"
@@ -65,21 +67,21 @@ reset
 run_push "" "" "" "" ""
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "nothing logged" "$ADB"
-assert_file_missing "state file untouched" "$STATE"
+assert_eq "prints nothing: no reading anywhere" "" "$TH_OUT"
 
 section "no transcript_path -> nothing written anywhere (no date beats a wrong date)"
 reset
 run_push "" 42 "2026-01-01T00:00:00Z" 55 "2026-01-05T00:00:00Z"
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "no history row" "$ADB"
-assert_file_missing "no state file either - never dated 'now'" "$STATE"
+assert_eq "prints nothing either - never dated 'now'" "" "$TH_OUT"
 
 section "transcript path doesn't exist -> nothing written"
 reset
 run_push "$TH_HOME/nope.jsonl" 42 "" 55 ""
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "no history row" "$ADB"
-assert_file_missing "no state file" "$STATE"
+assert_eq "prints nothing" "" "$TH_OUT"
 
 section "transcript has timestamps but no assistant entry -> nothing written"
 reset
@@ -92,7 +94,7 @@ EOF2
 run_push "$TRANSCRIPT" 42 "" 55 ""
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_file_missing "no history row" "$ADB"
-assert_file_missing "no state file" "$STATE"
+assert_eq "prints nothing" "" "$TH_OUT"
 
 section "first genuine reading -> dated by the last assistant entry, not by later lines"
 reset
@@ -106,29 +108,28 @@ write_transcript "$(cat <<'EOF2'
 {"type":"summary","leafUuid":"x"}
 EOF2
 )"
-run_push "$TRANSCRIPT" 42 "2026-01-01T15:00:00Z" 55 "2026-01-08T00:00:00Z"
+run_push "$TRANSCRIPT" 42 "2099-01-01T15:00:00Z" 55 "2099-01-08T00:00:00Z"   # resets ahead: the reset rule keeps the %
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_eq "exactly one row logged" "1" "$(row_count)"
 row="$(all_raw)"
 assert_contains "tagged claude_statusline" "$row" '"source":"claude_statusline"'
 assert_contains "carries the five-hour percent" "$row" '"five_hour_pct":42'
 assert_contains "carries the seven-day percent" "$row" '"seven_day_pct":55'
-assert_contains "carries the five-hour reset" "$row" '"five_hour_resets_at":"2026-01-01T15:00:00Z"'
+assert_contains "carries the five-hour reset" "$row" '"five_hour_resets_at":"2099-01-01T15:00:00Z"'
 assert_contains "names the machine that took it" "$row" '"machine":"t-mac"'
 assert_contains "observed_at is the last assistant entry's timestamp" \
     "$row" '"observed_at":1767261605'
-assert_file_exists "state file written" "$STATE"
-IFS="$SEP" read -r st_five st_five_reset st_week st_week_reset st_source st_observed < "$STATE"
-assert_eq "state 5h percent" "42" "$st_five"
-assert_eq "state 5h reset, as epoch" "1767279600" "$st_five_reset"
-assert_eq "state 7d percent" "55" "$st_week"
-assert_eq "state 7d reset, as epoch" "1767830400" "$st_week_reset"
-assert_eq "state source is 'claude_statusline'" "claude_statusline" "$st_source"
-assert_eq "state observed_at matches the row's" "1767261605" "$st_observed"
+IFS="$SEP" read -r st_five st_five_reset st_week st_week_reset st_source st_observed <<< "$TH_OUT"
+assert_eq "printed 5h percent" "42" "$st_five"
+assert_eq "printed 5h reset, as epoch" "4070962800" "$st_five_reset"
+assert_eq "printed 7d percent" "55" "$st_week"
+assert_eq "printed 7d reset, as epoch" "4071513600" "$st_week_reset"
+assert_eq "printed source is 'claude_statusline'" "claude_statusline" "$st_source"
+assert_eq "printed observed_at matches the row's" "1767261605" "$st_observed"
 assert_eq "ts column = observed_at, dt its UTC text" "1767261605	2026-01-01T10:00:05Z" "$(q "$ADB" "SELECT ts, dt FROM account_quotas")"
-assert_eq "typed columns" "42.0	1767279600	55.0	1767830400" \
+assert_eq "typed columns" "42.0	4070962800	55.0	4071513600" \
     "$(q "$ADB" "SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts FROM account_quotas")"
-assert_eq "latest view serves it" "claude_statusline	42.0" "$(q "$ADB" "SELECT source, five_hour_pct FROM latest")"
+assert_eq "latest view serves it" "claude_statusline	42.0	55.0" "$(q "$ADB" "SELECT source, five_hour_pct, seven_day_pct FROM latest")"
 
 section "a long bookkeeping tail still finds the assistant entry (byte window, not 20 lines)"
 reset
@@ -169,8 +170,8 @@ printf '%s\n' '{"type":"assistant","timestamp":"2026-01-01T10:05:00.000Z"}' >> "
 run_push "$TRANSCRIPT" 42 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
 assert_eq "three account rows" "3" "$(row_count)"
 assert_eq "session snapshot unchanged (cost, model, cache didn't move)" "1" "$(snapshots sess-1)"
-IFS="$SEP" read -r _ _ _ _ _ st_observed < "$STATE"
-assert_eq "state file's observed_at advances" "1767261900" "$st_observed"
+IFS="$SEP" read -r _ _ _ _ _ st_observed <<< "$TH_OUT"
+assert_eq "the printed observed_at advances" "1767261900" "$st_observed"
 
 section "a percent change at the same observed_at -> new account row"
 run_push "$TRANSCRIPT" 43 "" 55 "" "sess-1" 0.5 "" "claude-opus-5-5"
@@ -192,10 +193,10 @@ printf '%s\n' '{"type":"assistant","timestamp":"2026-01-02T10:00:00.000Z"}' > "$
 } > "$TRANSCRIPT"
 run_push "$FRESH" 16 "" 18 "" "fresh-session"
 run_push "$TRANSCRIPT" 0 "" 11 "" "idle-session"
-IFS="$SEP" read -r st_five _ st_week _ st_source st_observed < "$STATE"
-assert_eq "state keeps the fresh 5h percent" "16" "$st_five"
-assert_eq "state keeps the fresh 7d percent" "18" "$st_week"
-assert_eq "state keeps the fresh observed_at" "1767348000" "$st_observed"
+IFS="$SEP" read -r st_five _ st_week _ st_source st_observed <<< "$TH_OUT"
+assert_eq "the idle session is shown the fresh 5h percent" "16" "$st_five"
+assert_eq "...the fresh 7d percent" "18" "$st_week"
+assert_eq "...the fresh observed_at" "1767348000" "$st_observed"
 run_push "$TRANSCRIPT" 0 "" 11 "" "idle-session"
 assert_eq "idle re-render: no new account row" "2" "$(row_count)"
 
@@ -219,7 +220,7 @@ write_transcript '{"type":"assistant","timestamp":"2026-07-01T10:00:00+00:00"}'
 TZ=America/New_York run_push "$TRANSCRIPT" 10 "" 20 ""
 assert_contains "+00:00 suffix under America/New_York" "$(all_raw)" '"observed_at":1782900000'
 
-section "float percents -> logged unrounded, state file gets them rounded"
+section "float percents -> logged unrounded, printed rounded"
 reset
 write_transcript '{"type":"assistant","timestamp":"2026-03-01T00:00:00.000Z"}'
 run_push "$TRANSCRIPT" 23.5 "" 41.2 ""
@@ -227,9 +228,9 @@ assert_status "exits 0" 0 "$TH_STATUS"
 row="$(all_raw)"
 assert_contains "five-hour percent keeps its fraction" "$row" '"five_hour_pct":23.5'
 assert_contains "seven-day percent keeps its fraction" "$row" '"seven_day_pct":41.2'
-IFS="$SEP" read -r st_five _ st_week _ _ _ < "$STATE"
-assert_eq "state 5h percent rounded" "24" "$st_five"
-assert_eq "state 7d percent rounded" "41" "$st_week"
+IFS="$SEP" read -r st_five _ st_week _ _ _ <<< "$TH_OUT"
+assert_eq "printed 5h percent rounded" "24" "$st_five"
+assert_eq "printed 7d percent rounded" "41" "$st_week"
 
 section "session fields -> sessions database only; account row gets observed_by_session, never cost"
 reset
@@ -274,19 +275,35 @@ assert_contains "absent -> null" "$(snapshot_raw sess-1)" '"prompt_cache":null'
 
 section "a payload that is not JSON -> exits 0, writes nothing"
 reset
-th_run env HOME="$TH_HOME" bash -c "printf 'garbage' | bash '$INGEST'"
+th_run bash -c "printf 'garbage' | python3 '$INGEST'"
 assert_status "exits 0" 0 "$TH_STATUS"
-assert_eq "prints nothing" "" "$TH_OUT$TH_ERR"
-assert_file_missing "no state file" "$STATE"
+assert_eq "prints nothing (no reading anywhere), no error" "" "$TH_OUT$TH_ERR"
+assert_eq "prints nothing" "" "$TH_OUT"
 
-section "real time: when the script returns, the state file already holds the new reading"
+section "real time: the line printed already holds the reading of this very payload"
 reset
 write_transcript '{"type":"assistant","timestamp":"2026-04-01T00:00:00.000Z"}'
-payload='{"transcript_path":"'"$TRANSCRIPT"'","session_id":"bg-1","rate_limits":{"five_hour":{"used_percentage":7,"resets_at":1775000000},"seven_day":{"used_percentage":9,"resets_at":1775500000}}}'
-th_run env HOME="$TH_HOME" bash -c "printf '%s' '$payload' | bash '$INGEST'"
+payload='{"transcript_path":"'"$TRANSCRIPT"'","session_id":"bg-1","rate_limits":{"five_hour":{"used_percentage":7,"resets_at":4102444800},"seven_day":{"used_percentage":9,"resets_at":4102500000}}}'
+th_run bash -c "printf '%s' '$payload' | python3 '$INGEST'"
 assert_status "exits 0" 0 "$TH_STATUS"
-assert_eq "prints nothing" "" "$TH_OUT$TH_ERR"
-IFS="$SEP" read -r st_five st_five_reset _ _ _ _ < "$STATE"
-assert_eq "state file refreshed before the script returned" "7 1775000000" "$st_five $st_five_reset"
+assert_eq "nothing on stderr" "" "$TH_ERR"
+IFS="$SEP" read -r st_five st_five_reset _ _ _ _ <<< "$TH_OUT"
+assert_eq "this payload's reading, printed" "7 4102444800" "$st_five $st_five_reset"
+
+section "the reader prints the account's freshest reading: six fields, the reset rule applied"
+READER="$REPO_ROOT/src/statusline_payload_reader.py"
+read_latest() { printf '%s' "${1:-{\}}" | HOME="$TH_HOME" python3 "$READER"; }
+line="$(read_latest)"
+assert_eq "six fields, even for a payload without rate_limits" "6" "$(awk -F "$SEP" '{print NF}' <<< "$line")"
+assert_eq "...the latest view's source and time" "$(q "$ADB" "SELECT source || '|' || ts FROM latest")" "$(cut -d "$SEP" -f5,6 <<< "$line" | tr "$SEP" '|')"
+now="$(date +%s)"
+python3 -c "
+import sys; sys.path.insert(0, '$REPO_ROOT/src')
+import ingest_account_quota as g, usage_db
+g.add_row(usage_db.open_account('claude'), 'claude', {'ts': $now + 60, 'source': 'claude_api', 'machine': 't-mac',
+    'api': {'five_hour': {'utilization': 61.5, 'resets_at': $now - 5}, 'seven_day': {'utilization': 33.2, 'resets_at': $now + 3600}}})"
+assert_eq "a passed 5h reset: 0 and no reset; the 7d one rounded, its reset kept" "0${SEP}${SEP}33${SEP}$((now + 3600))${SEP}claude_api${SEP}$((now + 60))" "$(read_latest)"
+assert_eq "no database: prints nothing, exits 0" "0:" "$(printf '{}' | AGENT_USAGE_TRACKER_RUNTIME="$TH_HOME/none" python3 "$READER"; echo "$?:")"
+assert_eq "not JSON at all: still prints the reading" "6" "$(read_latest 'not json' | awk -F "$SEP" '{print NF}')"
 
 harness_summary

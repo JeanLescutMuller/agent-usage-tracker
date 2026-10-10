@@ -1,8 +1,8 @@
 #!/bin/bash
 # Tests for src/ingest_account_quota.py, the only writer of
 # account_quotas.db: what it stores, what it refuses, its idempotency, the
-# `latest` view, and the state/quota/claude file it keeps for
-# agent-statusline, auto-apply and jobs/claude-quota.sh.
+# `latest` view (the reset rule is tested with the reader,
+# test_ingest_claude_statusline.sh).
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 
@@ -10,7 +10,6 @@ SRC_DIR="$REPO_ROOT/src"
 RT="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-gate.XXXXXX")"
 trap 'rm -rf "$RT"' EXIT
 ADB="$RT/data/claude/account_quotas.db"
-STATE="$RT/state/quota/claude"
 SEP=$'\034'
 
 # ingest <agent> [flags] <<< rows - the gate's command line.
@@ -20,7 +19,6 @@ q() {
 for r in sqlite3.connect(sys.argv[1]).execute(sys.argv[2]):
     print("\t".join("" if v is None else str(v) for v in r))' "$1" "$2"
 }
-state_field() { cut -d "$SEP" -f "$1" "$STATE"; }
 
 section "statusline rows: stored with typed columns, raw kept verbatim"
 row='{"ts":2000,"iso":"x","source":"claude_statusline","observed_at":1900,"five_hour_pct":42.5,"seven_day_pct":10,"five_hour_resets_at":"1767279600","seven_day_resets_at":null,"observed_by_session":"s1"}'
@@ -69,19 +67,6 @@ assert_contains "both stored" "$(printf '%s\n%s\n' "$codex" "$plan" | ingest cod
 assert_eq "5h and 7d columns" "19.0	5100	3.0	9000" \
     "$(q "$CDB" "SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts FROM account_quotas WHERE source = 'codex_app_server'")"
 assert_eq "plan history has no current reading, so latest skips it" "codex_app_server" "$(q "$CDB" "SELECT source FROM latest")"
-assert_file_missing "codex never touches the Claude state file" "$RT/state/quota/codex"
-
-section "state/quota/claude: written newest-wins, six fields"
-rm -f "$STATE"
-py() { AGENT_USAGE_TRACKER_RUNTIME="$RT" python3 -c "import sys; sys.path.insert(0, '$SRC_DIR'); import ingest_account_quota as g; $1"; }
-col() { printf "{'ts': %s, 'source': '%s', 'five_hour_pct': %s, 'five_hour_resets_ts': %s, 'seven_day_pct': %s, 'seven_day_resets_ts': %s}" "$@"; }
-assert_eq "first write writes" "True" "$(py "print(g.write_state_if_newer($(col 500 claude_api 42.4 1700000000 55.5 1700100000)))")"
-assert_eq "fields: rounded percents, epoch resets, source, observed_at" "42${SEP}1700000000${SEP}56${SEP}1700100000${SEP}claude_api${SEP}500" "$(cat "$STATE")"
-assert_eq "an older reading does not overwrite" "False" "$(py "print(g.write_state_if_newer($(col 400 claude_statusline 1 None 2 None)))")"
-assert_eq "...source unchanged" "claude_api" "$(state_field 5)"
-assert_eq "a newer one does" "True" "$(py "print(g.write_state_if_newer($(col 600 claude_statusline 1 None 2 None)))")"
-assert_eq "...empty resets become empty fields, not 'None'" "1${SEP}${SEP}2${SEP}${SEP}claude_statusline${SEP}600" "$(cat "$STATE")"
-assert_eq "half rounds away from zero, like the old jq writer" "3" "$(py "print(g._round(2.5))")"
 
 section "the command line is idempotent"
 before="$(q "$ADB" "SELECT COUNT(*) FROM account_quotas")"

@@ -261,8 +261,7 @@ def main(argv: list[str] | None = None) -> None:
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
     raw = json.dumps(d_record)
-    # The gate stores a reading in account_quotas (and refreshes
-    # state/quota/claude when newer), a failed attempt in poll_errors.
+    # The gate stores a reading in account_quotas, a failed attempt in poll_errors.
     ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_record, raw)
     if d_error is None:
         print(f"5h {_pct(d_api.get('five_hour'))}% · 7d {_pct(d_api.get('seven_day'))}%{tail}")

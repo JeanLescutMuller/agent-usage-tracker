@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Collector for the Claude statusline payload: the JSON Claude Code hands
-every statusline render, piped here unchanged by bin/ingest-claude-statusline.sh
-(the path agent-statusline knows). That payload is the only free, per-render
-source of Claude's quota percent (USAGE_DATA_SOURCES.md §3.1).
+every statusline render, piped here unchanged by agent-statusline, which
+runs this file directly (its path is the contract: README.md's "Contract
+with agent-statusline"; install.sh writes its first line, this machine's
+python with -S, and MACHINE_NAME below). That payload is the only free,
+per-render source of Claude's quota percent (USAGE_DATA_SOURCES.md §3.1).
 
 It splits the payload by scope and hands each part to its gate:
-  - the quota reading -> ingest_account_quota.py (account_quotas.db, and
-    state/quota/claude when newer), tagged observed_by_session;
+  - the quota reading -> ingest_account_quota.py (account_quotas.db),
+    tagged observed_by_session and machine;
   - the session's cumulative cost, model and prompt_cache statistics ->
     ingest_session_usage.py (sessions_usages.db), only for a plain session id.
 Never a percent in the session part, never a cost in the account part.
@@ -21,13 +23,21 @@ can refresh rate_limits from a quota_check request it does not log), never
 too new, the safe direction for newest-wins. Only the transcript's last
 256 KB is read: bookkeeping tails can run past any fixed line count.
 
-Does nothing at all when the payload has no rate_limits (a session before its
-first message). Always exits 0 and prints nothing: a failure here must never
-reach the statusline.
+Stores nothing when the payload has no rate_limits (a session before its
+first message). Then, whatever it stored, prints the account's freshest
+reading - the `latest` view: any source, any machine, the reset rule
+applied - as one line of six fields separated by \x1c, the format agent-
+statusline and auto-apply read since 2026-08:
+    five_pct five_reset week_pct week_reset source observed_at
+(percents rounded half up; a reset that has passed is empty), or nothing
+when there is no reading. Always exits 0 and prints nothing else: a
+failure here must never reach the statusline, which then shows its own
+session's reading.
 
 Usage: <claude statusline payload JSON> | statusline_payload_reader.py
 """
 import json
+import os
 import sys
 import time
 from datetime import datetime
@@ -76,8 +86,26 @@ def text(value):
     return None if value is None or value == "" else str(value)
 
 
-def main() -> None:
-    d_payload = json.loads(sys.stdin.read())
+# This machine's name, written here by install.sh (rule "Machine name" in ~/AGENTS.md):
+# usage_db.machine_name() honours JR_MACHINE_NAME first, so a render needs no scutil call (~13 ms).
+MACHINE_NAME = "__MACHINE_NAME__"
+
+
+def latest_line() -> str | None:
+    """The six fields of the account's freshest reading, or None."""
+    db = usage_db.open_account("claude", readonly=True)
+    row = db and db.execute("SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, source, ts "
+                            "FROM latest").fetchone()
+    if not row:
+        return None
+    five, five_reset, week, week_reset, source, ts = row
+    return ingest_account_quota.FIELD_SEP.join([
+        str(ingest_account_quota._round(five)), str(five_reset or ""),
+        str(ingest_account_quota._round(week)), str(week_reset or ""), source, str(ts)])
+
+
+def store(d_payload: dict) -> None:
+    """The payload's quota reading and session part, each to its gate."""
     d_limits = d_payload.get("rate_limits") or {}
     if d_limits.get("five_hour") is None and d_limits.get("seven_day") is None:
         return
@@ -118,6 +146,21 @@ def main() -> None:
             "prompt_cache": d_payload.get("prompt_cache"),
         }
         ingest_session_usage.add_snapshot(usage_db.open_sessions("claude"), session_id, d_session)
+
+
+def main() -> None:
+    if not MACHINE_NAME.startswith("__"):  # left as is in the repo; filled in when deployed
+        os.environ.setdefault("JR_MACHINE_NAME", MACHINE_NAME)
+    try:
+        store(json.loads(sys.stdin.read()))
+    except Exception:  # a bad payload or a store failure must not cost the display
+        pass
+    try:
+        line = latest_line()
+    except Exception:
+        line = None
+    if line:
+        print(line, flush=True)
 
 
 if __name__ == "__main__":

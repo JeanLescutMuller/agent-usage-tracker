@@ -21,18 +21,16 @@ th_home="$(new_home)"
 RT="$th_home/opt/agent-usage-tracker"
 run_script install.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
-assert_file_exists "ingest script deployed" "$RT/bin/ingest-claude-statusline.sh"
-[ -x "$RT/bin/ingest-claude-statusline.sh" ]
-assert_status "ingest script is executable (agent-statusline checks -x)" 0 $?
+assert_file_missing "no bin/ any more: agent-statusline runs the reader itself" "$RT/bin"
 for f in usage_db.py ingest_account_quota.py ingest_session_usage.py statusline_payload_reader.py \
     claude_quota_api_poller.py codex_quota_api_poller.py codex_plan_history_poller.py \
     telemetry_receiver.py transcript_reader.py; do
     assert_file_exists "$f deployed" "$RT/src/$f"
 done
-assert_not_contains "the ingest wrapper runs this machine's python, not a bare name" \
-    "$(cat "$RT/bin/ingest-claude-statusline.sh")" '__PYTHON3__"'
-assert_not_contains "...and passes this machine's name (no scutil call per render)" \
-    "$(cat "$RT/bin/ingest-claude-statusline.sh")" 'machine="__MACHINE_NAME__"'
+assert_eq "the reader runs directly: this machine's python, -S" "#!$(command -v python3) -S" "$(head -1 "$RT/src/statusline_payload_reader.py")"
+assert_not_contains "...with this machine's name filled in" "$(cat "$RT/src/statusline_payload_reader.py")" 'MACHINE_NAME = "__MACHINE_NAME__"'
+[ -x "$RT/src/statusline_payload_reader.py" ]
+assert_status "...and executable" 0 $?
 assert_file_missing "no database before the first write" "$RT/data/claude/account_quotas.db"
 assert_file_exists "data/claude/ created" "$RT/data/claude"
 assert_file_exists "data/codex/ created" "$RT/data/codex"
@@ -62,13 +60,14 @@ run_script install.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_not_contains "nothing re-installed on an unchanged re-run" "$TH_OUT" "[+]"
 
-section "the deployed ingest script writes into the deployed runtime's databases"
+section "the deployed reader writes into the deployed runtime's databases, and prints the reading"
 printf '{"type":"assistant","timestamp":"2026-01-01T10:00:00Z"}\n' > "$th_home/t.jsonl"
-printf '{"transcript_path":"%s","session_id":"s1","rate_limits":{"five_hour":{"used_percentage":12}}}' "$th_home/t.jsonl" \
-    | HOME="$th_home" "$RT/bin/ingest-claude-statusline.sh"
+out="$(printf '{"transcript_path":"%s","session_id":"s1","rate_limits":{"five_hour":{"used_percentage":12}}}' "$th_home/t.jsonl" \
+    | env -u AGENT_USAGE_TRACKER_RUNTIME HOME="$th_home" "$RT/src/statusline_payload_reader.py")"
 assert_eq "one account row" "1" \
     "$(python3 -c "import sqlite3; print(sqlite3.connect('$RT/data/claude/account_quotas.db').execute('SELECT COUNT(*) FROM account_quotas').fetchone()[0])")"
-assert_file_exists "state/quota/claude written" "$RT/state/quota/claude"
+assert_eq "its reading printed" "12" "$(cut -d $'\034' -f1 <<< "$out")"
+assert_file_missing "no state file" "$RT/state/quota/claude"
 rm -rf "$th_home"
 
 section "telemetry env merge leaves every other settings key alone"

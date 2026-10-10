@@ -6,7 +6,7 @@ The whole target (Claude only, four categories of data) is specified in `design/
 
 | # | Next | State |
 |---|---|---|
-| 1 | Run the migration, `design/MIGRATION_PLAN.md` (validated 2026-10-10): one phase per session, after the user's "go" | phases 0–3 done 2026-10-10; next: phase 4 |
+| 1 | Run the migration, `design/MIGRATION_PLAN.md` (validated 2026-10-10): one phase per session, after the user's "go" | phases 0–4 done 2026-10-10; next: phase 5 (clean up) |
 | 2 | Build it, in the plan's order | after 1 |
 | 3 | Parked: who runs the transcript reader on the VM | — |
 

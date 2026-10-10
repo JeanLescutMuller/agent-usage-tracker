@@ -15,7 +15,7 @@ Last checked: 2026-10-10, against commit `9aed132`.
 | 5 | **A quota percent is account-wide only.** Never attribute it to a session, a folder or a machine | the meter is one number for the account; `USAGE_DATA_REFERENCE.md` §1 |
 | 6 | **The percent also counts usage no local file sees** (claude.ai chats, the mobile and desktop apps, Cowork, cloud sessions) | any correlation of the % with local tokens or $ assumes that share is small (`USAGE_DATA_SOURCES.md` §2.3) |
 | 7 | **Every $ is Claude Code's own list-price figure** (tokens × list price), not a bill. Where it is missing, do not compute one; use the tokens | no server returns a usage $ (`USAGE_DATA_SOURCES.md` §1) |
-| 8 | **A window whose reset time has passed is at 0%**, whatever the last reading says, until a new reading arrives | readings stop while nobody uses Claude Code (`USAGE_DATA_REFERENCE.md` §5.8) |
+| 8 | **A window whose reset time has passed is at 0%**, whatever the last reading says, until a new reading arrives; `latest` already applies it | readings stop while nobody uses Claude Code (`USAGE_DATA_REFERENCE.md` §5.8) |
 
 ## 2. Rows written after their `ts` (rule 3)
 
@@ -43,7 +43,7 @@ All paths under `~/opt/agent-usage-tracker/`. Claude only; Codex stays as today 
 
 | Question | Today (2026-10-10) | Target | Changes in |
 |---|---|---|---|
-| The account's quota now | `state/quota/claude`: one line, 6 fields separated by `\x1c`: `five_pct five_reset week_pct week_reset source observed_at`; apply rule 8 yourself | view `latest` of `data/claude/account_quotas.db`, rule 8 already applied (a passed window: 0%, reset NULL). The status line gets the same 6 fields printed by `src/statusline_payload_reader.py` | phase 4 (the file disappears) |
+| The account's quota now | view `latest` of `data/claude/account_quotas.db` (the reset rule applied: a passed window reads 0%, its reset NULL); the status line gets the same as six `\x1c`-separated fields printed by `src/statusline_payload_reader.py`. The file `state/quota/claude` is **gone since 2026-10-10** | — | done 2026-10-10 (phase 4) |
 | Quota history | table `account_quotas` of `data/claude/account_quotas.db`: **the same rows on both machines**, column `machine` = the machine that took the reading (NULL for the 72 readings `--peer` copied between the machines on 2026-10-10: their machine is unknown) | — | done 2026-10-10 (phase 1) |
 | Tokens and $ per 5-min slot, folder, interactive or not | table `slots` of `data/claude/aggregates.db`: 5-min slot × machine × folder × entrypoint × model; 6 token columns, `usd` (Claude Code's own), `tokens_without_usd` (the part `usd` does not cover). The view `usage_5m` of `sessions_usages.db` is **frozen since 2026-10-10 21:39 UTC** | — | done 2026-10-10 (phase 2) |
 | The same, every machine at once | on the VM: `data/claude/aggregates.db` (the VM's slots) + `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (the Mac's). The raw copies pushed until 2026-10-10 are in `central/_archive/<machine>-push-era/` | — | done 2026-10-10 (phase 3) |

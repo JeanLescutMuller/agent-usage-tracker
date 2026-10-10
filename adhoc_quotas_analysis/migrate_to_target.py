@@ -64,6 +64,15 @@ Subcommands (more are added as the phases are built):
            untouched, to central/_archive/<machine>-push-era/: that move is
            its backup. A folder that holds only aggregates.db (the new
            layout) is left. Idempotent.
+  view-latest
+           (step 4.1, every machine) data/claude/account_quotas.db's view
+           `latest` recreated as usage_db.ACCOUNT_SCHEMA has it (the reset
+           rule), user_version 3. A view holds no data. Idempotent.
+  remove-legacy
+           (step 4.4, every machine, after the deploy) the runtime's bin/
+           (the old statusline entry point) and state/quota/claude (the
+           old copy of the freshest reading), which nothing reads any more;
+           state/quota/ too once empty. Idempotent.
 
 Usage:
   python3 adhoc_quotas_analysis/migrate_to_target.py STEP [options] [--runtime DIR]
@@ -82,7 +91,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm",
-                                    "remove-trigger", "check-intermediary", "archive-central"])
+                                    "remove-trigger", "check-intermediary", "archive-central", "view-latest", "remove-legacy"])
 parser.add_argument("job", nargs="?", help="pause, remove-trigger: the job (e.g. claude-quota)")
 parser.add_argument("--runtime", type=Path, default=Path.home() / "opt" / "agent-usage-tracker")
 parser.add_argument("--peer", help="cat1-shared: the other machine (ssh alias)")
@@ -362,7 +371,37 @@ def archive_central() -> None:
         say(f"{folder.name}: {len(l_files)} files, {size / 1e6:.1f} MB -> {target.relative_to(args.runtime)}")
 
 
+def view_latest() -> None:
+    db = open_rw(args.runtime / "data" / "claude" / "account_quotas.db")
+    before = db.execute("SELECT sql FROM sqlite_master WHERE name = 'latest'").fetchone()[0]
+    db.execute("BEGIN IMMEDIATE")
+    db.execute("DROP VIEW IF EXISTS latest")
+    db.execute(LATEST_VIEW)
+    db.execute(f"PRAGMA user_version = {usage_db.SCHEMA_VERSION}")
+    db.execute("COMMIT")
+    row = db.execute("SELECT source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts FROM latest").fetchone()
+    say(f"latest {'recreated' if before.strip() != LATEST_VIEW.strip() else 'unchanged'}, user_version "
+        f"{usage_db.SCHEMA_VERSION}; it now reads {row}")
+
+
+def remove_legacy() -> None:
+    l_gone = []
+    if (args.runtime / "bin").is_dir():
+        shutil.rmtree(args.runtime / "bin")
+        l_gone.append("bin/")
+    for f in (args.runtime / "state" / "quota" / "claude",):
+        if f.exists():
+            f.unlink()
+            l_gone.append(str(f.relative_to(args.runtime)))
+    quota_dir = args.runtime / "state" / "quota"
+    if quota_dir.is_dir() and not any(quota_dir.iterdir()):
+        quota_dir.rmdir()
+        l_gone.append("state/quota/")
+    say(f"removed {l_gone or 'nothing (already gone)'}")
+
+
 {"backup": backup, "pause": pause, "cat1-shared": cat1_shared, "sync-init": sync_init,
  "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm,
  "remove-trigger": remove_trigger, "check-intermediary": check_intermediary,
- "archive-central": archive_central}[args.step]()
+ "archive-central": archive_central, "view-latest": view_latest,
+ "remove-legacy": remove_legacy}[args.step]()

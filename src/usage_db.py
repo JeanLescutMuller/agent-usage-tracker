@@ -34,7 +34,8 @@ AGENTS = ("claude", "codex")
 
 # Bumped when a schema change needs a migration; 0 means "not created yet".
 # 2: account_quotas.machine and its place in `latest` (2026-10, adhoc_quotas_analysis/migrate_to_target.py cat1-machine).
-SCHEMA_VERSION = 2
+# 3: `latest` applies the reset rule (2026-10, migrate_to_target.py view-latest).
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 10_000
 
 ACCOUNT_SCHEMA = """
@@ -68,13 +69,20 @@ CREATE TABLE poll_errors (
     row_hash TEXT NOT NULL UNIQUE
 );
 CREATE INDEX poll_errors_source_ts ON poll_errors(source, ts);
--- The freshest reading of the account, whatever wrote it, on any machine.
+-- The freshest reading of the account, whatever wrote it, on any machine,
+-- with the reset rule (design/TARGET_SPEC.md §3.2): a window whose reset
+-- time has passed is at 0% and its reset unknown (NULL), until a newer
+-- reading - readings stop while nobody uses Claude Code.
 CREATE VIEW latest AS
-    SELECT ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts
-    FROM account_quotas
-    WHERE five_hour_pct IS NOT NULL OR seven_day_pct IS NOT NULL
-    ORDER BY ts DESC, rowid DESC
-    LIMIT 1;
+    SELECT ts, dt, source, machine,
+           CASE WHEN five_hour_resets_ts <= CAST(strftime('%s', 'now') AS INTEGER) THEN 0.0 ELSE five_hour_pct END AS five_hour_pct,
+           CASE WHEN five_hour_resets_ts <= CAST(strftime('%s', 'now') AS INTEGER) THEN NULL ELSE five_hour_resets_ts END AS five_hour_resets_ts,
+           CASE WHEN seven_day_resets_ts <= CAST(strftime('%s', 'now') AS INTEGER) THEN 0.0 ELSE seven_day_pct END AS seven_day_pct,
+           CASE WHEN seven_day_resets_ts <= CAST(strftime('%s', 'now') AS INTEGER) THEN NULL ELSE seven_day_resets_ts END AS seven_day_resets_ts
+    FROM (SELECT * FROM account_quotas
+          WHERE five_hour_pct IS NOT NULL OR seven_day_pct IS NOT NULL
+          ORDER BY ts DESC, rowid DESC
+          LIMIT 1);
 """
 
 SESSIONS_SCHEMA = """

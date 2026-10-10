@@ -32,7 +32,7 @@ Each database has one **gate**, the only code that writes it: it checks every ro
 COLLECTORS (src/)                           GATES (src/)               DATABASES (data/<agent>/)
 claude_quota_api_poller.py ──────────────┐
 codex_quota_api_poller.py ───────────────┤
-codex_plan_history_poller.py ────────────┼▶ ingest_account_quota.py ─▶ account_quotas.db  (+ state/quota/claude, view latest)
+codex_plan_history_poller.py ────────────┼▶ ingest_account_quota.py ─▶ account_quotas.db  (view latest)
                                ┌─quota───┘
 statusline_payload_reader.py ──┤
                                └─session─┐
@@ -42,7 +42,7 @@ transcript_reader.py (every 5 min) ──────┘
 
 | Collector | Runs | Source | Hands to |
 |---|---|---|---|
-| `statusline_payload_reader.py` (run by `bin/ingest-claude-statusline.sh`) | Every Claude status-line render, before the display (about 28 ms) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | Account gate (source `claude_statusline`) and sessions gate (snapshot). Nothing when the transcript has no `assistant` entry to date the reading; repeats of the same session's reading are skipped |
+| `statusline_payload_reader.py` (run by agent-statusline) | Every Claude status-line render, before the display (24 ms, printing the freshest reading included) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | Account gate (source `claude_statusline`) and sessions gate (snapshot). Nothing when the transcript has no `assistant` entry to date the reading; repeats of the same session's reading are skipped |
 | `claude_quota_api_poller.py` | Job `claude-quota` (Mac and VM, 60 s tick): the Mac first syncs the readings with the VM, both ways, every 2 min (`--sync-with`, `design/TARGET_SPEC.md` §3.3); then each machine polls when the account's newest reading (any source, any machine) is older than 110 s (Mac) / 290 s (VM) while a Claude status line is on screen, else 300 s / 480 s, so the VM polls only while the Mac sleeps; a 429 waits its Retry-After on the machine that got it only (429s are counted per machine, `USAGE_DATA_SOURCES.md` §3.5) | `GET /api/oauth/usage` | Account gate (`claude_api`); a failed attempt goes to the `poll_errors` table |
 | `codex_quota_api_poller.py` | Job `codex-quota` (Mac, 60 s tick); skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
 | `codex_plan_history_poller.py` | Job `codex-plan-history` (Mac, hourly tick); one fetch a day, 1 h after a failure | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
@@ -79,20 +79,18 @@ On the VM, there are no Codex jobs (Codex is not installed there), and the Claud
 
 ## Contract with agent-statusline
 
-The two projects share exactly three files, each written by one side only. Neither writes into the other's tree, and each works without the other. Unchanged by the 2026-10-08 move to SQLite.
+The two projects share exactly two files, each written by one side only. Neither writes into the other's tree, and each works without the other. Since 2026-10-10 (migration phase 4): before, a `bin/ingest-claude-statusline.sh` and a `state/quota/claude` file.
 
 | Interface | Written by | Read by | What |
 |---|---|---|---|
-| `~/opt/agent-usage-tracker/bin/ingest-claude-statusline.sh` | this repo (deployed) | agent-statusline's Claude provider runs it | The Claude provider pipes its raw stdin payload in, unchanged, on every render, before display. Which fields are kept, and where, is this repo's business only. Runs `statusline_payload_reader.py` in the foreground (about 28 ms), so the render that brings a new reading displays it. Always exits 0; its output is ignored. |
-| `~/opt/agent-usage-tracker/state/quota/claude` | the account gate, for `claude_statusline` and `claude_api` readings | agent-statusline's Claude provider, whatever the source; also `auto-apply` (`runner/limits.py`) and this repo's `claude-quota.sh` (its age decides when to poll) | The freshest known 5h/7d reading: six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded. Each writer overwrites only if its `observed_at` is newer, so every open session converges on the account's freshest reading. `source` is information only. A push reading is dated by its transcript's last `assistant` entry and is never written undated, so an idle session's frozen reading can't win. |
+| `~/opt/agent-usage-tracker/src/statusline_payload_reader.py` | this repo (deployed, executable: `install.sh` writes its first line, this machine's python with `-S`, and its machine name) | agent-statusline's Claude provider runs it | The provider pipes its raw stdin payload in, unchanged, on every render, before display; which fields are kept, and where, is this repo's business only. It stores the reading in the foreground (24 ms in all, measured 2026-10-10), then prints the account's freshest 5h/7d reading - the `latest` view: any session, poller or machine, the reset rule applied - as one line of six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded, a passed reset empty. Always exits 0; prints nothing when there is no reading. A push reading is dated by its transcript's last `assistant` entry and never stored undated, so an idle session's frozen reading can't win. auto-apply reads the same `latest` view directly (`FOR_READERS.md`). |
 | `~/opt/agent-statusline/state/heartbeat/{claude,codex}` | agent-statusline, every render | `claude-quota.sh`, `codex_quota_api_poller.py` | Only the mtime matters: a status line is on screen, so poll faster. Missing = idle cadence. |
 
-Without agent-statusline there are no push rows: Claude Code runs a single `statusLine` command, so nothing else can feed the ingest script. Claude's meter history then comes only from the poller, on its ~5 min idle cadence and subject to its 429s, and there are no session cost or `prompt_cache` rows. Codex is unaffected. What the status line shows without this repo is agent-statusline's business.
+Without agent-statusline there are no push rows: Claude Code runs a single `statusLine` command, so nothing else can feed the reader. Claude's meter history then comes only from the poller, on its ~5 min idle cadence and subject to its 429s, and there are no session cost or `prompt_cache` rows. Codex is unaffected. What the status line shows without this repo is agent-statusline's business.
 
 ## Runtime layout
 
     ~/opt/agent-usage-tracker/
-    ├── bin/ingest-claude-statusline.sh   the statusline's entry point (see the contract above)
     ├── {claude-quota,codex-quota,codex-plan-history,aggregates,push}.sh   the jobs' job-runner entrypoints (from jobs/; Linux: no Codex jobs)
     ├── src/                              usage_db.py, the two ingest_*.py gates, the collectors
     ├── data/                             see USAGE_DATA_REFERENCE.md §1
