@@ -213,5 +213,8 @@ assert_contains "telemetry and snapshots stay" "$out" "left: session_snapshots 0
 assert_file_exists "Codex's offsets stay" "$P5/state/transcript_reader/codex_offsets.json"
 assert_eq "Codex's database untouched" "requests" "$(qq "$P5/data/codex/sessions_usages.db" "SELECT name FROM sqlite_master WHERE name = 'requests'")"
 assert_contains "re-running: nothing" "$(python3 "$MIGRATE" drop-old-requests --runtime "$P5")" "dropped nothing (already gone)"
+mkdir -p "$P5/data/claude" && AGENT_USAGE_TRACKER_RUNTIME="$P5" JR_MACHINE_NAME=m1 python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/src'); import usage_db; usage_db.open_intermediary('claude'); usage_db.open_aggregates('claude')"
+out="$(JR_MACHINE_NAME=m1 python3 "$MIGRATE" check-intermediary --runtime "$P5")"
+assert_contains "check-intermediary after phase 5: the slots half only" "$out" "the old requests table is gone (phase 5)"
 
 harness_summary

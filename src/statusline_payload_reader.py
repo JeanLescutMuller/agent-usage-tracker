@@ -34,6 +34,9 @@ when there is no reading. Always exits 0 and prints nothing else: a
 failure here must never reach the statusline, which then shows its own
 session's reading.
 
+A failure is never shown; the last one, with its traceback, is in
+logs/statusline_reader.err (overwritten).
+
 Usage: <claude statusline payload JSON> | statusline_payload_reader.py
 """
 import json
@@ -148,16 +151,32 @@ def store(d_payload: dict) -> None:
         ingest_session_usage.add_snapshot(usage_db.open_sessions("claude"), session_id, d_session)
 
 
+# The last failure, for whoever troubleshoots: the statusline must never see an
+# error, so without this file a broken reader would go unnoticed. Overwritten,
+# never appended: it cannot grow, and its time says whether it is current.
+ERROR_LOG = usage_db.RUNTIME_DIR / "logs" / "statusline_reader.err"
+
+
+def log_error(stage: str) -> None:
+    try:
+        import traceback  # only on a failure: the normal render stays fast
+        ERROR_LOG.parent.mkdir(parents=True, exist_ok=True)
+        ERROR_LOG.write_text(f"{usage_db.iso(int(time.time()))} {stage} failed\n{traceback.format_exc()}")
+    except Exception:
+        pass
+
+
 def main() -> None:
     if not MACHINE_NAME.startswith("__"):  # left as is in the repo; filled in when deployed
         os.environ.setdefault("JR_MACHINE_NAME", MACHINE_NAME)
     try:
         store(json.loads(sys.stdin.read()))
     except Exception:  # a bad payload or a store failure must not cost the display
-        pass
+        log_error("storing the payload")
     try:
         line = latest_line()
     except Exception:
+        log_error("reading latest")
         line = None
     if line:
         print(line, flush=True)

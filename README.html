@@ -124,7 +124,7 @@
   <h1>agent-usage-tracker</h1>
   <p class="lead">Records Claude Code usage over time - quota percent, tokens, Claude Code's own $ - from every source that keeps no history of its own, on the MacBook and the VM <code>H-Frank-1</code>, in four categories of data. Codex keeps its own jobs, outside the four (<code>design/CODEX_DESIGN.md</code>). Last updated 2026-10-11 (the design built on 2026-10-10: <code>design/TARGET_SPEC.md</code>).</p>
   <nav>
-    <a href="#legend">Legend</a><a href="#categories">1 · Four categories</a><a href="#picture">2 · Big picture</a><a href="#deepdive">3 · Jobs and services</a><a href="#reset">4 · Latest reading</a><a href="#stored">5 · What is stored</a><a href="#contract">6 · Contract with agent-statusline</a><a href="#status">7 · Status</a><a href="#folders">8 · Folders</a><a href="#usage">9 · Install, tests, docs</a>
+    <a href="#legend">Legend</a><a href="#categories">1 · Four categories</a><a href="#picture">2 · Big picture</a><a href="#deepdive">3 · Jobs and services</a><a href="#reset">4 · Latest reading</a><a href="#stored">5 · What is stored</a><a href="#contract">6 · Contract with agent-statusline</a><a href="#status">7 · Status</a><a href="#folders">8 · Folders</a><a href="#usage">9 · Install, tests, logs, docs</a>
   </nav>
 
   <h2 id="legend">Legend</h2>
@@ -493,17 +493,27 @@
 │                                   transcript_reader/ (Codex)
 ├── central/                        VM only: the Mac's slots,
 │                                   _archive/ (old push copies)
-├── logs/                           the receiver's
+├── logs/                           the receiver's; the reader's
+│                                   last failure
 └── com.jeanlescut.agent-usage-     trigger files (symlinked
     tracker.*.plist / .service      from the OS folders)</pre>
   </div>
 
   <!-- ===================================================== USAGE -->
-  <h2 id="usage">9 · Install, tests, docs</h2>
+  <h2 id="usage">9 · Install, tests, logs, docs</h2>
   <div class="card">
 <pre>bash install.sh      # needs python3 and job-runner (~/opt/job-runner/lib.sh); LaunchAgents on macOS, systemd --user on Linux
 bash tests/run.sh    # hermetic</pre>
     <table>
+      <tr><th>Something looks wrong in…</th><th>Look at (on that machine)</th></tr>
+      <tr><td>any job: <code>claude-quota</code>, <code>aggregates</code>, <code>codex-*</code></td><td>job-runner's dashboard <code>http://h-frank-1:8097</code> (each check's status and last line; red when a job stops succeeding); the full output of each run in <code>~/opt/job-runner/logs/agent-usage-tracker.&lt;job&gt;/&lt;machine&gt;/</code>, its statuses in <code>~/opt/job-runner/status/agent-usage-tracker.&lt;job&gt;/&lt;machine&gt;.tsv</code></td></tr>
+      <tr><td>the quota shown by the status line</td><td><code>~/opt/agent-usage-tracker/logs/statusline_reader.err</code> (the reader's last failure, with its time and traceback; absent when it never failed), then <code>SELECT * FROM latest</code></td></tr>
+      <tr><td>the sync between the machines</td><td>the Mac's <code>claude-quota</code> runs (its last line says <code>sync ↑n ↓n</code> or <code>H-Frank-1 not reached</code>); <code>state/sync/claude_quotas.json</code> (watermarks, last success)</td></tr>
+      <tr><td>the slots, or their copy on the VM</td><td><code>python3 adhoc_quotas_analysis/migrate_to_target.py check-intermediary</code> (the slots against a separate count); the Mac's <code>aggregates</code> runs (<code>sent n to H-Frank-1</code>); <code>state/push/watermarks.json</code></td></tr>
+      <tr><td>telemetry</td><td><code>~/opt/agent-usage-tracker/logs/otel-receiver.{log,err}</code>; <code>launchctl print gui/$(id -u)/com.jeanlescut.agent-usage-tracker.otel</code> (VM: <code>systemctl --user status</code>)</td></tr>
+      <tr><td>a migration step</td><td><code>~/opt/agent-usage-tracker/data/_archive/migrate_to_target.log</code></td></tr>
+    </table>
+    <table style="margin-top: 12px">
       <tr><th>File</th><th>For</th></tr>
       <tr><td><code>USAGE_DATA_SOURCES.md</code></td><td>what usage data exists upstream, for Claude and Codex, in which unit and granularity</td></tr>
       <tr><td><code>USAGE_DATA_REFERENCE.md</code></td><td>what this repo captures, from where, into which table, and the traps</td></tr>

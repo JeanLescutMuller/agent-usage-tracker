@@ -273,11 +273,17 @@ reset
 run_push "$TRANSCRIPT" 10 "" 20 "" "sess-1" 0.5 ""
 assert_contains "absent -> null" "$(snapshot_raw sess-1)" '"prompt_cache":null'
 
+section "a working run logs no error"
+assert_file_missing "no error log after all the runs above" "$TH_HOME/opt/agent-usage-tracker/logs/statusline_reader.err"
+
 section "a payload that is not JSON -> exits 0, writes nothing"
 reset
 th_run bash -c "printf 'garbage' | python3 '$INGEST'"
 assert_status "exits 0" 0 "$TH_STATUS"
 assert_eq "prints nothing (no reading anywhere), no error" "" "$TH_OUT$TH_ERR"
+assert_contains "...but the failure is logged for troubleshooting, with its traceback" \
+    "$(cat "$TH_HOME/opt/agent-usage-tracker/logs/statusline_reader.err")" "storing the payload failed"
+assert_contains "...the error itself" "$(cat "$TH_HOME/opt/agent-usage-tracker/logs/statusline_reader.err")" "JSONDecodeError"
 assert_eq "prints nothing" "" "$TH_OUT"
 
 section "real time: the line printed already holds the reading of this very payload"

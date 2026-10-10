@@ -81,7 +81,7 @@ The latest Claude reading is the view **`latest`** of `account_quotas.db` (§4):
 | Codex poller | ✅ 5h + 7d, account-wide, whole numbers, full raw response | ✅ account-wide daily buckets + lifetime total | ❌ |
 | Telemetry receiver | ❌ | ✅ **per API request**, per model, with `query_source` — including the requests transcripts never record — from 2026-09-30 | ✅ per request, list price |
 | Codex plan-history poller | ✅ finished 5h + 7d windows of the last 7 days, **fractional** (basis points), with their real start and end, full raw response — from 2026-09-30 | ❌ | ❌ |
-| Transcript reader | ❌ | ✅ **per API request**, per model, with session, execution folder and entrypoint — every request a transcript records, back to the oldest transcript kept (365 days) | ✅ per request, list price (`usage_db.PRICES`, exact, Sources §3.4) |
+| Transcript reader | ❌ | ✅ **per API request**, per model, with session, execution folder and entrypoint — every request a transcript records, back to the oldest transcript kept (365 days) | Claude: none computed (Claude Code's own `cost_usd` comes from telemetry, joined in `slots`); Codex: list price (`usage_db.PRICES`) |
 
 ### 1.3 When each writer actually writes
 
@@ -345,9 +345,11 @@ Deliberately not captured because it already persists elsewhere: Codex per-turn 
 | Nothing lost in the 2026-10-08 migration | `python3 adhoc_quotas_analysis/migrate_to_sqlite.py --logs data/_archive/pre-sqlite-20261008T090432Z/logs` after copying the archived JSONL back into a scratch runtime (`--runtime`): every line must be found, 0 inserted |
 | Envelope compression | Apply `quota_model.py`'s `envelope()` and compare row counts |
 | Fractional percent | `SELECT COUNT(*) FROM account_quotas WHERE five_hour_pct != CAST(five_hour_pct AS INT)` |
-| Writer behaviour | `bash tests/run.sh`: `test_ingest_claude_statusline.sh` (push path), `test_account_gate.sh` and `test_session_gate.sh` (the gates and views), `test_transcript_reader.sh`, `test_migrate_to_sqlite.sh` |
+| Writer behaviour | `bash tests/run.sh` (`tests/README.md` lists what each file covers) |
 | Scope rule holds | No percent-like key path (`pct\|percent\|utiliz\|basis_points`) in any `raw` of `sessions_usages.db`; no `account_quotas.raw` with `session_cost_usd`, `prompt_cache` or a bare `session_id`. Both gates refuse such rows |
 | Transcript totals are exact | `python3 adhoc_quotas_analysis/verify_token_costs.py` (USAGE_DATA_SOURCES.md §3.4) |
+| The slots add up to their requests | `python3 adhoc_quotas_analysis/migrate_to_target.py check-intermediary` on each machine: the slots written so far against a separate count over `intermediary/` + telemetry (requests, tokens, $, tokens without $); exits 1 on a difference |
+| Both machines hold the same readings | `SELECT machine, COUNT(*) FROM account_quotas GROUP BY 1` on each: equal within one sync (2 min) |
 
 When any of this changes, update this file and its "Last verified" line.
 

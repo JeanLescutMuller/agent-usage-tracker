@@ -57,7 +57,9 @@ Subcommands (more are added as the phases are built):
            `requests` table is in intermediary/claude/requests.db with the
            same five token counts; and the slots written so far add up to
            the same requests, tokens and $ as a separate count over
-           intermediary/ + telemetry. Exits 1 on any difference.
+           intermediary/ + telemetry. Exits 1 on any difference. Still
+           useful after phase 5 (the old table gone, that half is skipped):
+           it re-checks the slots against their requests.
   archive-central
            (step 3.2, on the VM) every central/<machine>/ folder of the old
            push (anything but data/claude/aggregates.db) moved whole,
@@ -327,13 +329,17 @@ def check_intermediary() -> None:
     sessions = usage_db.db_path("claude", "sessions_usages")
     old = open_rw(sessions)
     old.execute("PRAGMA query_only = ON")
-    l_old = old.execute("SELECT request_id, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, "
-                        "cache_write_1h_tokens, dt FROM requests").fetchall()
-    l_missing = [r for r in l_old if r[0] not in d_new]
-    l_diff = [r for r in l_old if r[0] in d_new and tuple(r[1:6]) != tuple(d_new[r[0]])]
-    say(f"old requests {len(l_old)}, in intermediary {len(d_new)}; missing {len(l_missing)}, different {len(l_diff)}"
-        + (f"; e.g. missing {[(r[0], r[6]) for r in l_missing[:3]]}" if l_missing else "")
-        + (f"; e.g. different {l_diff[:2]}" if l_diff else ""))
+    l_missing, l_diff = [], []
+    if old.execute("SELECT 1 FROM sqlite_master WHERE name = 'requests'").fetchone():
+        l_old = old.execute("SELECT request_id, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, "
+                            "cache_write_1h_tokens, dt FROM requests").fetchall()
+        l_missing = [r for r in l_old if r[0] not in d_new]
+        l_diff = [r for r in l_old if r[0] in d_new and tuple(r[1:6]) != tuple(d_new[r[0]])]
+        say(f"old requests {len(l_old)}, in intermediary {len(d_new)}; missing {len(l_missing)}, different {len(l_diff)}"
+            + (f"; e.g. missing {[(r[0], r[6]) for r in l_missing[:3]]}" if l_missing else "")
+            + (f"; e.g. different {l_diff[:2]}" if l_diff else ""))
+    else:
+        say(f"the old requests table is gone (phase 5): only the slots are checked; {len(d_new)} requests in intermediary")
     # The slots written so far against a separate count of the same requests.
     agg = open_rw(usage_db.db_path("claude", "aggregates"))
     agg.execute("PRAGMA query_only = ON")
