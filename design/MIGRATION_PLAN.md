@@ -1,6 +1,6 @@
 # Migration plan: from today's design to `design/TARGET_SPEC.md`
 
-Status: **draft, 2026-10-10, waiting for the user's validation.** The target is `design/TARGET_SPEC.md` (validated 2026-10-10, proposals P1–P12); its section 11 lists the data to move. This file says in which order, how each step is checked, and how each is undone. Claude only; Codex keeps running as today, except that its rows stop reaching the VM in phase 3 (accepted, `design/CODEX_DESIGN.md`).
+Status: **validated by the user on 2026-10-10; not started.** The target is `design/TARGET_SPEC.md` (validated 2026-10-10, proposals P1–P12); its section 11 lists the data to move. This file says in which order, how each step is checked, and how each is undone. Claude only; Codex keeps running as today, except that its rows stop reaching the VM in phase 3 (accepted, `design/CODEX_DESIGN.md`).
 
 ## Rules for every phase
 
@@ -127,10 +127,10 @@ Checks: on both machines every open session's status line shows the same % as `S
 | bootstrap-home + `~/.claude/CLAUDE.md` | 5 | Monitoring paragraph | Mac (template for every machine) |
 | job-runner | 5 | dashboard conf, examples | VM (dashboard) |
 
-## Questions for the user
+## Decided with the user
 
-| # | Question | Proposal |
+| # | Decision | |
 |---|---|---|
 | 1 | ~~Commit in the other repos?~~ **Decided 2026-10-10**: agent-statusline, auto-apply, bootstrap-home: the agent edits, runs their tests, deploys and commits (one commit per repo per phase). agent-quota-maximizer: no change (to be decommissioned); readers follow `FOR_READERS.md` | — |
-| 2 | job-runner (5.5): edit, deploy the dashboard, but not commit, as before? | as you said earlier: edit only, you commit |
-| 3 | Pace: one phase per session, each waiting for your "go"? | yes; phases 1 → 3 the same day |
+| 2 | ~~job-runner?~~ **Decided 2026-10-10**: Option A too: the agent edits, tests, deploys and commits: `examples/agent-usage-tracker/` (claude-quota updated in phase 1; aggregates added, transcripts and push removed in phases 2–3), `test/examples_test.sh`, `dashboard/conf/agent-usage-tracker.{transcripts,push}.conf` = `DECOMMISSIONED=1` + `deploy/deploy.sh vm`, the README diagram; no change to `lib.sh` | — |
+| 3 | ~~Pace?~~ **Decided 2026-10-10**: one phase per session, each after the user's "go"; phases 1 → 3 the same day | — |
