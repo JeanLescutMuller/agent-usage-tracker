@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Collector for the Claude statusline payload: the JSON Claude Code hands
 every statusline render, piped here unchanged by agent-statusline, which
-runs this file directly (its path is the contract: README.md's "Contract
+runs this file directly (its path is the contract: README.html's "Contract
 with agent-statusline"; install.sh writes its first line, this machine's
 python with -S, and MACHINE_NAME below). That payload is the only free,
 per-render source of Claude's quota percent (USAGE_DATA_SOURCES.md §3.1).

@@ -8,7 +8,6 @@ The design (`design/TARGET_SPEC.md`) is built: phases 0–5 of `design/MIGRATION
 |---|---|---|
 | 1 | Check after a night with the Mac asleep that the VM polled then, and only then (`account_quotas` rows with `source = 'claude_api'` by `machine`) | so far the VM has not polled once while the Mac was awake, as designed; its polling while the Mac sleeps is not yet seen |
 | 2 | The VM's `~/AGENTS.md` (Oct 9) still describes `state/quota/claude`: refreshed by the next `bootstrap-home` run there | the template (`bootstrap-home` `17404ef`) and the Mac's copy are current |
-| 3 | `design/DESIGN_MAP.html`: its "target" is now the current design; turn it into `README.html` (+ `README.md` stub), dropping the "current" section | concern C14 |
 | 4 | `adhoc_quotas_analysis/AGENTS.md` is 9,835 words (docs checker limit 600): move the investigation history to `doc/` | concern C13; pre-existing |
 | 5 | auto-apply's Agent SDK sessions send no telemetry, so their slots carry `tokens_without_usd` only: give them the telemetry env keys (in auto-apply) | concern C7 |
 | 6 | Parked: who runs the transcript reader on the VM (a reader's own job, eventually) | — |

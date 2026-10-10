@@ -28,7 +28,7 @@
 #
 # Independent of agent-statusline: either can be installed first, or alone.
 # Without the statusline there are no push rows and the Claude poller stays
-# on its idle cadence (README.md's "Contract with agent-statusline").
+# on its idle cadence (README.html's "Contract with agent-statusline").
 # Without job-runner the triggers run, but every check fails until it is
 # installed.
 set -uo pipefail

@@ -129,7 +129,7 @@ Checks: on both machines every open session's status line shows the same % as `S
 | 5.3 | Docs: `FOR_READERS.md` (section 3: "today" becomes the target), `README.md`, `USAGE_DATA_REFERENCE.md` (tree, §4 state file gone, §10, §11, §6 rows, "Last verified"), `AGENTS.md` (layout, three gates, under 600 words: concern C13), `TODO.md` |
 | 5.4 | Global instructions: the "Monitoring" paragraph of `~/.claude/CLAUDE.md` and of `~/dev/bootstrap-home/files/home_AGENTS.md` still describe `bin/ingest-claude-statusline.sh` and `state/quota/claude` |
 | 5.5 | job-runner: `DECOMMISSIONED=1` for `agent-usage-tracker.transcripts` and `.push`; `examples/agent-usage-tracker/` updated; dashboard deployed |
-| 5.6 | `design/`: DESIGN_MAP's "target" becomes the current design (README.html later, concern C14); `OPEN_QUESTIONS.md` emptied of what is done |
+| 5.6 | `design/`: DESIGN_MAP's "target" becomes the current design (README.html later, concern C14); `OPEN_QUESTIONS.md` emptied of what is done (done 2026-10-11: `README.html`) |
 
 ## What each phase changes in other projects
 

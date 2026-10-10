@@ -1,6 +1,6 @@
 # agent-usage-tracker development instructions
 
-For *working on* this repo; what it does: `README.md`. `CLAUDE.md` is a symlink to this file.
+For *working on* this repo; what it does: `README.html` (`README.md` is its stub). `CLAUDE.md` is a symlink to this file.
 
 ## Repo layout
 
@@ -10,7 +10,8 @@ agent-usage-tracker/
 ├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, where
 ├── FOR_READERS.md                # how other projects read the data
-├── design/                       # TARGET_SPEC.md (the four categories), MIGRATION_PLAN.md, DESIGN_MAP.html, CODEX_DESIGN.md
+├── README.html                   # the page: what exists, what runs where (README.md: its stub)
+├── design/                       # TARGET_SPEC.md (the four categories), MIGRATION_PLAN.md, CODEX_DESIGN.md
 ├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
 │   ├── usage_db.py               # paths, schemas, connect(), Codex price table
 │   ├── ingest_account_quota.py   # GATE of account_quotas.db (Category 1); also the VM side of the 2-min sync

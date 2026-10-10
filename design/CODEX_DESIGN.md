@@ -1,6 +1,6 @@
 # Codex: current capture and how it would fit the four categories
 
-**Status: someday.** The first target design (`design/DESIGN_MAP.html`, decided with the user on 2026-10-10) is **Claude only**. Codex is left out of it on purpose: its jobs and databases keep running as they do today, and nothing in the first target may break them. This file keeps everything Codex-related in one place for the day it is picked up (`TODO.md`, "Someday: Codex in the four categories").
+**Status: someday.** The first target design (`design/TARGET_SPEC.md`, drawn in `README.html`; decided with the user on 2026-10-10) is **Claude only**. Codex is left out of it on purpose: its jobs and databases keep running as they do today, and nothing in the first target may break them. This file keeps everything Codex-related in one place for the day it is picked up (`TODO.md`, "Someday: Codex in the four categories").
 
 ## What runs today (2026-10-10, MacBook only: Codex is not installed on the VM)
 

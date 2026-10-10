@@ -1,6 +1,6 @@
 # Target specification (Claude only)
 
-Status: **validated by the user on 2026-10-10 (P1–P12 all accepted); built the same day** (`design/MIGRATION_PLAN.md`, phases 0–5). It turns the design the user validated in `design/DESIGN_MAP.html` (and the decisions in `design/OPEN_QUESTIONS.md`) into exact files, tables, jobs and contracts. The migration plan is written from it once it is validated. Codex is out of scope and keeps running as today (`design/CODEX_DESIGN.md`).
+Status: **validated by the user on 2026-10-10 (P1–P12 all accepted); built the same day** (`design/MIGRATION_PLAN.md`, phases 0–5). It turns the design the user validated in `design/DESIGN_MAP.html` (since 2026-10-11: `README.html`) (and the decisions in `design/OPEN_QUESTIONS.md`) into exact files, tables, jobs and contracts. The migration plan is written from it once it is validated. Codex is out of scope and keeps running as today (`design/CODEX_DESIGN.md`).
 
 Words used here, as defined with the user:
 

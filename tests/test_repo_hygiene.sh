@@ -2,7 +2,7 @@
 # Repo-wide checks that don't belong to any one file: every script parses,
 # shellcheck passes where available, only the two gates write to a database,
 # and the boundary with agent-statusline
-# documented in README.md's "Contract with agent-statusline" holds - this
+# documented in README.html's "Contract with agent-statusline" holds - this
 # repo never sources or runs anything from it, and reads exactly one thing
 # from its runtime tree: the heartbeat files.
 set -uo pipefail

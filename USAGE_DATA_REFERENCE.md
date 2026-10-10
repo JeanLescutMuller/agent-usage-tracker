@@ -10,7 +10,7 @@ Markers: **[verified]** was measured on this machine's data; **[docs]** comes fr
 
 ## 1. Overview
 
-All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `src/statusline_payload_reader.py`, and displays the line that prints: the `latest` view (README.md's "Contract with agent-statusline").
+All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `src/statusline_payload_reader.py`, and displays the line that prints: the `latest` view (README.html's "Contract with agent-statusline").
 
 **Usage data is in two SQLite databases per agent, split by scope** (since 2026-10-08; JSONL files before, same split since 2026-09-30):
 
