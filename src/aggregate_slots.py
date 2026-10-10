@@ -10,7 +10,10 @@ data/claude/aggregates.db. The `aggregates` job's command, every 5 min:
      folder and entrypoint of the same session's transcript requests and
      their cache writes as cache_write_unknown_tokens (telemetry gives no
      5m / 1h split); summed per (slot, machine, folder, entrypoint, model);
-  3. handed to ingest_aggregates.py, the only writer of aggregates.db.
+  3. handed to ingest_aggregates.py, the only writer of aggregates.db;
+  4. with --send-to=HOST (the Mac): every slot not sent yet goes to HOST's
+     central/<machine>/ copy (push_to_central.py). A failed send is retried
+     by the next run (exit 1 meanwhile: the job shows it).
 
 A request belongs to the slot of its first transcript line. A slot is
 final once it ended at or before the latest scan's complete_through_ts:
@@ -23,11 +26,15 @@ simply looked at again (and stays empty).
 No $ computed here: `usd` is Claude Code's own figure where telemetry has
 one; `tokens_without_usd` is everything it does not cover.
 
-Usage: python3 aggregate_slots.py   (prints the reader's line, then its own)
+Usage: python3 aggregate_slots.py [--send-to HOST]   (prints the reader's line, then its own)
 """
+import argparse
+import subprocess
+import sys
 import time
 
 import ingest_aggregates
+import push_to_central
 import transcript_reader
 import usage_db
 
@@ -92,13 +99,23 @@ def final_slots(now: int) -> tuple[list[dict], int, int]:
     return sorted(d_slots.values(), key=lambda d: (d["ts"], d["folder"], d["entrypoint"], d["model"])), start, end
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--send-to", metavar="HOST", help="then send the slots not sent yet to HOST (the Mac: H-Frank-1)")
+    args = parser.parse_args(argv)
     transcript_reader.main()
     now = int(time.time())
     l_slots, start, end = final_slots(now)
     n = ingest_aggregates.add_slots(usage_db.open_aggregates("claude"), l_slots) if l_slots else 0
-    print(f"slots: {n} written ({usage_db.iso(start)} → {usage_db.iso(end)}), "
-          f"{sum(d['requests'] for d in l_slots)} requests", flush=True)
+    said = f"slots: {n} written ({usage_db.iso(start)} → {usage_db.iso(end)}), {sum(d['requests'] for d in l_slots)} requests"
+    if args.send_to:
+        try:
+            said += f" · {push_to_central.send_slots(args.send_to)}"
+        except (RuntimeError, OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            print(f"not sent, retried next run: {exc}", file=sys.stderr, flush=True)
+            print(f"{said} · {args.send_to} not reached", flush=True)
+            sys.exit(1)
+    print(said, flush=True)
 
 
 if __name__ == "__main__":

@@ -163,4 +163,14 @@ python3 "$MIGRATE" check-intermediary --runtime "$P2" >/dev/null 2>&1
 assert_status "a request missing from intermediary/: exit 1" 1 $?
 unset AGENT_USAGE_TRACKER_RUNTIME JR_MACHINE_NAME
 
+section "phase 3: archive-central"
+C="$TMP/p3/opt/agent-usage-tracker/central"
+mkdir -p "$C/old-mac/data/claude" "$C/new-mac/data/claude" "$C/_archive"
+printf 'x' > "$C/old-mac/data/claude/account_quotas.db"; printf 'x' > "$C/new-mac/data/claude/aggregates.db"
+out="$(python3 "$MIGRATE" archive-central --runtime "$TMP/p3/opt/agent-usage-tracker")"
+assert_contains "the old folder moved whole" "$out" "old-mac: 1 files"
+assert_file_exists "...to _archive/<machine>-push-era" "$C/_archive/old-mac-push-era/data/claude/account_quotas.db"
+assert_file_exists "a folder with only aggregates.db stays" "$C/new-mac/data/claude/aggregates.db"
+assert_contains "re-running moves nothing" "$(python3 "$MIGRATE" archive-central --runtime "$TMP/p3/opt/agent-usage-tracker")" "new-mac: new layout, left as is"
+
 harness_summary

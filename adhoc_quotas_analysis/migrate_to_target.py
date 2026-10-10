@@ -58,6 +58,12 @@ Subcommands (more are added as the phases are built):
            same five token counts; and the slots written so far add up to
            the same requests, tokens and $ as a separate count over
            intermediary/ + telemetry. Exits 1 on any difference.
+  archive-central
+           (step 3.2, on the VM) every central/<machine>/ folder of the old
+           push (anything but data/claude/aggregates.db) moved whole,
+           untouched, to central/_archive/<machine>-push-era/: that move is
+           its backup. A folder that holds only aggregates.db (the new
+           layout) is left. Idempotent.
 
 Usage:
   python3 adhoc_quotas_analysis/migrate_to_target.py STEP [options] [--runtime DIR]
@@ -76,7 +82,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm",
-                                    "remove-trigger", "check-intermediary"])
+                                    "remove-trigger", "check-intermediary", "archive-central"])
 parser.add_argument("job", nargs="?", help="pause, remove-trigger: the job (e.g. claude-quota)")
 parser.add_argument("--runtime", type=Path, default=Path.home() / "opt" / "agent-usage-tracker")
 parser.add_argument("--peer", help="cat1-shared: the other machine (ssh alias)")
@@ -340,6 +346,23 @@ def check_intermediary() -> None:
         sys.exit("check-intermediary: differences, see above")
 
 
+def archive_central() -> None:
+    central = args.runtime / "central"
+    for folder in sorted(p for p in central.iterdir() if p.is_dir() and p.name != "_archive") if central.is_dir() else []:
+        l_files = [f.relative_to(folder) for f in folder.rglob("*") if f.is_file()]
+        if all(str(f).startswith("data/claude/aggregates.db") for f in l_files):
+            say(f"{folder.name}: new layout, left as is")
+            continue
+        target = central / "_archive" / f"{folder.name}-push-era"
+        if target.exists():
+            target = target.with_name(f"{target.name}-{STAMP}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        size = sum((folder / f).stat().st_size for f in l_files)
+        folder.rename(target)
+        say(f"{folder.name}: {len(l_files)} files, {size / 1e6:.1f} MB -> {target.relative_to(args.runtime)}")
+
+
 {"backup": backup, "pause": pause, "cat1-shared": cat1_shared, "sync-init": sync_init,
  "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm,
- "remove-trigger": remove_trigger, "check-intermediary": check_intermediary}[args.step]()
+ "remove-trigger": remove_trigger, "check-intermediary": check_intermediary,
+ "archive-central": archive_central}[args.step]()

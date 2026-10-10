@@ -49,26 +49,25 @@ transcript_reader.py (every 5 min) ──────┘
 | `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
 | `transcript_reader.py` | Job `aggregates`, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Claude: `intermediary/claude/requests.db` (local working tables, one row per API request once it is 15 min old); Codex: the sessions gate (`requests`), one row per turn |
 | `aggregate_slots.py` | Job `aggregates`, right after the reader | `intermediary/`, `telemetry` | `ingest_aggregates.py` (the gate) → `data/claude/aggregates.db` `slots`: each final 5-min slot once |
-| `receive_from_machine.py` | On the VM, run over ssh by another machine's `push_to_central.py` | That machine's new rows | Both gates, into `central/<machine>/` (see "Central store on the VM") |
+| `receive_from_machine.py` | On the VM, run over ssh by the Mac's `push_to_central.py` | The Mac's new slots | `ingest_aggregates.py`, into `central/<machine>/data/claude/aggregates.db` (see "Central store on the VM") |
 
 Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
 
 ## Central store on the VM
 
-Every machine pushes its new rows to the VM `H-Frank-1` every 5 minutes; the VM keeps one copy per machine, written through the same gates. Push only: the VM never pulls (the Mac sleeps, goes offline, sits behind NAT), and a failed push is simply retried next time.
+The Mac sends its Category 3 rows (the final 5-min slots) to the VM `H-Frank-1` every 5 minutes, into its own folder there, written through the same gate. Push only: the VM never pulls (the Mac sleeps, goes offline, sits behind NAT), and a failed send is simply retried next time. Quota readings have their own 2-min sync; raw rows never leave their machine (`design/TARGET_SPEC.md`).
 
 ```
-MacBook                                               VM H-Frank-1 (always on)
- collectors → gates → data/<agent>/*.db                collectors → gates → data/<agent>/*.db
- push_to_central.py ── new rows, ssh ────────────────▶ receive_from_machine.py → gates → central/<machine>/data/<agent>/*.db
-                                                       push_to_central.py (local, no ssh) ──▶ central/H-Frank-1/data/<agent>/*.db
+MacBook                                                VM H-Frank-1 (always on)
+ aggregates job → data/claude/aggregates.db             aggregates job → data/claude/aggregates.db
+ push_to_central.py ── new slots, ssh ────────────────▶ receive_from_machine.py → ingest_aggregates.py → central/chan-lescut-macbook-pro/data/claude/aggregates.db
 ```
 
 | Piece | What |
 |---|---|
-| `push_to_central.py` | Every 5 min on every machine: per table, the rows above the last confirmed rowid (`state/push/watermarks.json`), in chunks of 20,000, over `ssh -C`; the watermark advances only after the VM confirms |
-| `receive_from_machine.py` | On the VM: hands each received row to the gates of `central/<machine>/` (history as sent; a re-sent row is a no-op; never touches `state/quota/claude`) |
-| Reading everything | One folder per machine under `~/opt/agent-usage-tracker/central/` on the VM, each with the same databases and views as a local install |
+| `push_to_central.py` | Called by the Mac's `aggregates` job: the slots above the last confirmed rowid (`state/push/watermarks.json`, key `claude/slots`), in chunks of 20,000, over `ssh -C`; the watermark advances only after the VM confirms |
+| `receive_from_machine.py` | On the VM: the received slots → `ingest_aggregates.py` into `central/<machine>/`; a re-sent slot is a no-op, a bad row refuses its chunk |
+| Reading everything | On the VM: `data/claude/aggregates.db` + `central/*/data/claude/aggregates.db`; the pushed history until 2026-10-10 is in `central/_archive/` |
 
 Deploying to the VM (development stays on the Mac):
 
@@ -108,7 +107,7 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
     │   ├── quota/claude                  latest Claude reading (see the contract above)
     │   ├── transcript_reader/offsets.json  how far each transcript has been read
     │   └── push/watermarks.json            last rowid confirmed by the VM, per table
-    ├── central/<machine>/data/<agent>/   on the VM only: every machine's pushed copy
+    ├── central/<machine>/data/claude/aggregates.db   on the VM only: another machine's slots (central/_archive/: the old push copies)
     ├── logs/                             otel-receiver (.log / .err); each job's checks are logged by job-runner (~/opt/job-runner/logs/agent-usage-tracker.<job>/)
     └── com.jeanlescut.agent-usage-tracker.{otel,<job>}.plist   LaunchAgents, symlinked from ~/Library/LaunchAgents/
                                           (Linux: the same names as .service/.timer, symlinked from ~/.config/systemd/user/)

@@ -22,13 +22,13 @@ agent-usage-tracker/
 │   ├── telemetry_receiver.py                    # collector: local OTLP receiver (KeepAlive LaunchAgent)
 │   ├── transcript_reader.py                     # Claude transcripts -> intermediary/ (each request once); Codex session files -> requests
 │   ├── aggregate_slots.py + ingest_aggregates.py  # the job `aggregates`: final 5-min slots -> data/claude/aggregates.db, and its GATE
-│   ├── push_to_central.py                       # every machine: new rows -> the VM over ssh, every 5 min (reads only)
-│   ├── receive_from_machine.py                  # collector on the VM: pushed rows -> both gates, into central/<machine>/
+│   ├── push_to_central.py                       # the Mac's aggregates job: new slots -> the VM over ssh (reads only)
+│   ├── receive_from_machine.py                  # on the VM: the Mac's slots -> ingest_aggregates.py, into central/<machine>/
 │   ├── merge_claude_env.py + claude_telemetry_env.json  # run from the repo: owns the telemetry keys in ~/.claude/settings.json's `env`
 │   ├── launchd/                                 # LaunchAgent templates (macOS): job.plist.template (one per job, rendered) and the receiver's
 │   └── systemd/                                 # the same as systemd --user units (Linux: the VM): job.{service,timer} and the receiver's
 ├── jobs/                         # the jobs' job-runner entrypoints (separate project ~/dev/job-runner), deployed to ~/opt/agent-usage-tracker/<job>.sh:
-│                                 # claude-quota, codex-quota, codex-plan-history (Mac only), aggregates, push; each decides when, runs one collector, records the check
+│                                 # claude-quota, aggregates, codex-quota, codex-plan-history (Mac only); each decides when, runs one collector, records the check
 ├── adhoc_quotas_analysis/        # research, run by hand, never deployed - see its own AGENTS.md (the deep-dive: investigation, findings, gotchas, naming history)
 ├── tests/                        # hermetic bash test suite, see tests/README.md
 └── TODO.md                       # parked gaps

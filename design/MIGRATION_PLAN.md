@@ -94,6 +94,8 @@ Undo: remove `intermediary/` and `aggregates.db` (both rebuildable), previous co
 
 ## Phase 3 · Send slots to the VM, retire push
 
+**Done 2026-10-10, 21:48 UTC**: a last push from each machine (Mac 71 rows, VM 16), then its trigger removed on both; the VM's old `central/H-Frank-1/` (126.1 MB) and `central/chan-lescut-macbook-pro/` (268.2 MB) moved whole to `central/_archive/<machine>-push-era/`; the Mac's first send: 2,945 slots, the same totals on both sides (24,010 requests, 5,728,383,000 tokens, $866.935544). job-runner: `transcripts` and `push` decommissioned on the dashboard (done here rather than in 5.5, so their cards never turned red).
+
 | # | Where | Step |
 |---|---|---|
 | 3.1 | Mac, VM | run `push.sh` once by hand (flush), then `migrate_to_target.py remove-trigger push` |
