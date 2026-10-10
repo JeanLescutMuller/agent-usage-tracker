@@ -274,27 +274,16 @@ def iso(ts: int) -> str:
 
 
 def machine_name() -> str:
-    """This machine's name, by job-runner's rule so that every project agrees
-    (~/opt/job-runner/lib.sh, JR_MACHINE_NAME): on macOS the LocalHostName in
-    lower case (chan-lescut-macbook-pro), elsewhere the short hostname
-    (H-Frank-1). Not the Mac's network-derived hostname: with no HostName set
-    it drifted from chan-lescut-macbook-pro-1 to Chan-Lescut-MacBook-Pro to
-    chan-lescut-macbook-pro on 2026-10-08 (USAGE_DATA_REFERENCE.md §11)."""
+    """This machine's name: "Machine name" in ~/AGENTS.md (copy it identically)."""
     # Imports here, not at the top: the statusline path never needs them.
-    import socket
     import subprocess
     import sys
-    if os.environ.get("JR_MACHINE_NAME"):
-        return os.environ["JR_MACHINE_NAME"]
-    if sys.platform == "darwin":
-        try:
-            name = subprocess.run(["scutil", "--get", "LocalHostName"], capture_output=True, text=True,
-                                  timeout=5, check=True).stdout.strip().lower()
-            if name:
-                return name
-        except (OSError, subprocess.SubprocessError):
-            pass
-    return socket.gethostname().split(".")[0]
+    name = (os.environ.get("JR_MACHINE_NAME") or (
+        subprocess.run(["scutil", "--get", "HostName"], capture_output=True, text=True).stdout
+        if sys.platform == "darwin" else Path("/etc/hostname").read_text())).strip().split(".")[0]
+    if not re.fullmatch(r"[A-Za-z0-9-]+", name):
+        raise RuntimeError("no machine name: macOS sudo scutil --set HostName <name>; Linux sudo hostnamectl set-hostname <name>")
+    return name
 
 
 def request_usd(model: str | None, inp: int, out: int, cache_read: int, cache_write_5m: int, cache_write_1h: int):

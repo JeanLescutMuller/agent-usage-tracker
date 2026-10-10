@@ -390,7 +390,7 @@ One row per Claude API request found in a transcript (`~/.claude/projects/**/*.j
 |---|---|
 | `ts`, `dt` | The request's first transcript line |
 | `request_id` | `requestId` (else `message.id`); UNIQUE, so a resumed session's copied requests are skipped |
-| `machine` | The machine's name, `usage_db.machine_name()`: job-runner's rule (Mac: `LocalHostName` in lower case; Linux: short hostname) |
+| `machine` | The machine's name, `usage_db.machine_name()`: the rule "Machine name" in `~/AGENTS.md` (Mac: `HostName`; Linux: `/etc/hostname`) |
 | `session_id`, `folder`, `entrypoint` | `sessionId`, `cwd` (the execution folder), `entrypoint` (`cli` = interactive; `sdk-cli`, `sdk-py`, … = headless) |
 | `model` | `message.model` |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | From the request's line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output; the first line undercounts output about 2×) |
@@ -416,7 +416,7 @@ A request is stored once it is complete: when its first line is ≥ 15 min old (
 └── H-Frank-1/data/claude/{account_quotas,sessions_usages}.db
 ```
 
-One folder per machine, named by job-runner's rule (`usage_db.machine_name()`: the Mac's `LocalHostName` in lower case, the VM's short hostname; the Mac's network-derived hostname drifted on 2026-10-08, see §6), each a full copy of that machine's databases, with the same tables and views (`latest`, `usage_requests`, `usage_5m`). Written only by `receive_from_machine.py` through the gates, from the rows each machine's `push_to_central.py` sends every 5 minutes. The VM's own data reaches `central/H-Frank-1/` the same way, without ssh.
+One folder per machine, named by the rule "Machine name" in `~/AGENTS.md` (`usage_db.machine_name()`: the Mac's `HostName`, the VM's `/etc/hostname`; the Mac's network-derived hostname drifted on 2026-10-08, see §6), each a full copy of that machine's databases, with the same tables and views (`latest`, `usage_requests`, `usage_5m`). Written only by `receive_from_machine.py` through the gates, from the rows each machine's `push_to_central.py` sends every 5 minutes. The VM's own data reaches `central/H-Frank-1/` the same way, without ssh.
 
 | Property | Detail |
 |---|---|
