@@ -19,7 +19,7 @@ Prints {"inserted": n, "duplicate": n, "rejected": n} and exits 0 once
 every line was handled (a rejected row is counted and reported on stderr,
 not retried forever).
 
-Usage: ... | python3 receive_from_machine.py --machine <short hostname>
+Usage: ... | python3 receive_from_machine.py --machine <usage_db.machine_name() of the sender>
 """
 import argparse
 import json

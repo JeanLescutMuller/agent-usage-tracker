@@ -9,7 +9,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 SRC_DIR="$REPO_ROOT/src"
 RT="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-push.XXXXXX")"
 trap 'rm -rf "$RT"' EXIT
-HOST="$(python3 -c 'import socket; print(socket.gethostname().split(".")[0])')"
+HOST="$(python3 -c "import sys; sys.path.insert(0, \"$SRC_DIR\"); import usage_db; print(usage_db.machine_name())")"
 CENTRAL="$RT/central/$HOST/data"
 export AGENT_USAGE_TRACKER_RUNTIME="$RT"
 

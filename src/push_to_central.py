@@ -13,7 +13,7 @@ watermark advances only after the VM confirmed it; a re-sent row is a
 no-op on the VM (the gates' row_hash / request_id). So an offline run, a
 crash or a dropped connection just means the rows go on the next run.
 
-On the central machine itself (its short hostname is the central's), the
+On the central machine itself (its name, usage_db.machine_name(), is the central's), the
 receiver runs locally, without ssh.
 
 Every table is insert-only, so "rows above the last rowid" is exactly the

@@ -51,7 +51,7 @@ VM central/<machine>/<agent>/  ◀── same two gates ◀───────
 | 6 | Readers, docs, tests | ✅ this repo and agent-quota-maximizer's `s1_ingest.py`; ⏳ the statusline, auto-apply and `jobs/claude-quota.sh` still read `state/quota/claude` (kept, written by the account gate) - switch them to the `latest` view, then drop the file |
 | 7 | Codex sessions | ✅ 2026-10-08: turns in `data/codex/sessions_usages.db`, identical to ccusage. **Open: which Codex price is the reference?** `usage_db.PRICES` uses ccusage's $4/$20 for `gpt-5.6-sol` (reproduces its totals; other Codex models stay NULL), `adhoc_quotas_analysis/CONCLUSIONS.md` uses $5/$30. Pick one before the maximizer converts Codex $ to % |
 
-`machine` = the short hostname (decided 2026-10-08).
+`machine` = the machine's name by job-runner's rule, `usage_db.machine_name()` (decided 2026-10-08, rule aligned 2026-10-10 after the Mac's hostname drifted).
 
 ### Why
 

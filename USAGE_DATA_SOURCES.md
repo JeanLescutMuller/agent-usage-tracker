@@ -6,7 +6,7 @@ It does **not** cover how percentages convert into dollars beyond the constants 
 
 Markers: **[tested]** was exercised live on this machine; **[verified]** was measured on existing data on this machine; **[source]** was read in upstream source code (`openai/codex` at commit `a5cce88`, 2026-09-30) but not exercised; **[docs]** comes from official documentation. Anything else is inference and says so.
 
-*Last tested: 2026-09-30, Claude Code 2.1.284, codex-cli 0.154.0, Claude Pro and ChatGPT Plus accounts. Transcript and Codex session token totals and the Claude price table re-verified 2026-10-07 against telemetry and ccusage 20.0.26 (§3.4, §4.1).*
+*Last tested: 2026-09-30, Claude Code 2.1.284, codex-cli 0.154.0, Claude Pro and ChatGPT Plus accounts. Transcript and Codex session token totals and the Claude price table re-verified 2026-10-07 against telemetry and ccusage 20.0.26 (§3.4, §4.1). Every raw Codex key scanned for a dollar amount 2026-10-08 (§4.5). Token lifetimes and the per-machine scope of a 429 verified 2026-10-10 (§3.5).*
 
 ---
 
@@ -16,10 +16,10 @@ Markers: **[tested]** was exercised live on this machine; **[verified]** was mea
 |---|---|---|
 | **Quota percent** | Share of a rate-limit window consumed, 0–100 | Both agents, several channels, always account-wide |
 | **Tokens** | Input / output / cache-read / cache-write counts | Both agents, per request, per turn or per session |
-| **Spend (USD)** | Dollar cost | **Claude only** locally, always at *list* prices |
+| **Spend (USD)** | Tokens × a list price, never a billed amount | **Claude only**, computed by Claude Code itself; Codex nowhere |
 
 - **Percent is the only authoritative unit.** It is what actually runs out, and the only number a limit is enforced against. Anything that must not overshoot should be measured in percent.
-- **USD is list-price, not subscription cost.** Claude Code reports `costBasis: "list"` **[tested]**. Dollars are a *comparison* metric (was this model worth it?), never a budget.
+- **No server returns a dollar amount for usage; every USD figure is tokens × list price.** Claude Code multiplies tokens by its built-in list prices (`costBasis: "list"` **[tested]**) and reports the result in the statusline `cost`, the transcript `cost-state`, telemetry `cost_usd` and the `-p` JSON. ccusage and this repo recompute the same product and agree to the cent (§3.4). Codex reports no dollars at all (§4.5): a Codex USD figure is tokens × a price someone chose, with nothing upstream to check it against. Dollars are a *comparison* metric (was this model worth it?), never a budget; on a subscription the only real money is the plan fee.
 - **Tokens convert to percent by an unknown, variable factor.** The meter weights cache reads far below list price (roughly 4–5×, `CONCLUSIONS.md`), and the dollars-per-percent ratio varies about ±30% between windows.
 
 Rule of thumb: **enforce on percent, compare on dollars, diagnose on tokens.**
@@ -149,7 +149,7 @@ Opus 5.5's price differs from Opus 5's: $4/$20 with cache reads at 0.05× input,
 
 **Assistant messages do not cover every request.** In the tested interactive session, the two recorded messages summed to 20 input / 101 output / 58,777 cache-read / 11,919 cache-write tokens, while the same session's `cost-state` counted 1,267 / 365 / 94,178 / 11,968 **[tested]**. Computed from the messages, the cost is ≈ $0.030 against $0.0364 in `cost-state` — about 17% of the spend is not in the messages. OpenTelemetry (§3.7) identified them in a second interactive session: **session-title generation (`generate_session_title`) and prompt suggestions (`prompt_suggestion`)** **[tested]**.
 
-**`cost-state` records — per-session, per-model totals.** Present since Claude Code 2.1.239, in 71 of 159 main-session transcripts on 2026-09-30, 1–5 records per session; the exact trigger is not verified **[verified]**. It includes the requests the messages miss:
+**`cost-state` records — per-session, per-model totals.** Present since Claude Code 2.1.239, in 71 of 159 main-session transcripts on 2026-09-30 (192 transcript files on 2026-10-08), 1–5 records per session; the exact trigger is not verified **[verified]**. It includes the requests the messages miss:
 
 ```json
 {"type": "cost-state", "sessionId": "...", "totalCostUSD": 0.0364458,
@@ -168,6 +168,8 @@ It has no timestamp of its own; `startTime + totalDuration` dates it.
 ### 3.5 `GET /api/oauth/usage` — the metadata endpoint
 
 Authenticated with the Claude Code OAuth token from the macOS Keychain. Returns `five_hour` / `seven_day` (and several always-`null` model- or product-specific windows), each with `utilization`, `resets_at`, and `limit_dollars` / `used_dollars` / `remaining_dollars` that are **always `null`**, plus an `extra_usage` object (disabled on this account) **[verified]**. `utilization` is a whole number: 0 fractional among 11,314 values **[verified]**. Unreliable: about 21% of calls got HTTP 429, and more failed on network errors (`adhoc_quotas_analysis/AGENTS.md`). No tokens, no dollars.
+
+**The token, and the scope of a 429 [verified 2026-10-10].** Each machine where Claude Code is logged in has its own OAuth pair: an access token valid 8 h and a refresh token valid weeks (Mac: macOS Keychain, `Claude Code-credentials`; Linux: `~/.claude/.credentials.json`). A poller borrows that machine's access token; only Claude Code renews it, when it runs on that machine. A machine with no Claude Code activity for 8 h therefore gets **401** until its next session (the VM: 16 a day on 2026-10-09 and 10-10); once the refresh token expires too, only a new login helps. **A 429 is counted per token, i.e. per machine, not per account**: on 2026-10-10 the VM got 429 with `Retry-After: 3600` at 13:17:06 UTC, and the Mac's poller then succeeded 27 times, every 2 minutes, until 14:14:20. It limits only this metadata endpoint; Claude Code's own requests are unaffected (§3.6). So a 429 makes only the machine that got it wait.
 
 **`seven_day_breakdown`** (present since 2026-09-14, already in every poller row's raw `api`) splits the 7-day meter by product: `rows[]` of `{key, display_name, percent}` with keys `claude_code`, `chat`, `cowork`, `other`, plus `as_of` and `window_started_at` **[verified 2026-10-08]**. It is the only account-wide signal of usage outside Claude Code (web and app chats, Cowork). Every reading so far has `claude_code` at 100% and the others at 0. It does not say which machine or whether a Claude Code session ran locally or in the cloud. Re-checked 2026-10-08 after the Max 5x upgrade: the `*_dollars` fields are still `null` and `spend` (usage credits beyond the plan limits) is disabled with `used` 0: **no account-wide token or dollar figure exists for a Claude subscription**.
 
@@ -208,7 +210,7 @@ Tested on an interactive session too **[tested 2026-09-30]**: four `api_request`
 
 ### 4.1 Session `.jsonl` files
 
-`~/.codex/sessions/**/*.jsonl`, one file per thread; the first line's `payload.id` is the thread id **[verified]**. 66 files, 54.5 MB as of 2026-09-29 **[verified]**. The `token_count` event carries both percent and tokens:
+`~/.codex/sessions/**/*.jsonl` (and `~/.codex/archived_sessions/`), one file per thread; the first line's `payload.id` is the thread id **[verified]**. 66 files, 54.5 MB as of 2026-09-29 **[verified]**. The `token_count` event carries both percent and tokens:
 
 ```json
 {"timestamp": "2026-09-16T15:43:30.869Z", "type": "event_msg", "payload": {
@@ -255,7 +257,7 @@ Called directly by the Codex TUI and backend client, not exposed through app-ser
 
 | Endpoint | Result | Content |
 |---|---|---|
-| `GET usage/plan_limit_history?days=7` | ✅ 200 | Finished windows only: `window_minutes`, `starts_at`, `ends_at`, `used_basis_points` (**hundredths of a percent, fractional**: 118.79 = 1.1879%), `accounting_complete`; plus `data_as_of`, `coverage_start`, `approximate: true`, `boundary_tolerance_seconds: 60`. Three periods returned for the last 7 days. |
+| `GET usage/plan_limit_history?days=7` | ✅ 200 | Finished windows only: `window_minutes`, `starts_at`, `ends_at`, `used_basis_points` (**hundredths of a percent, fractional**: 118.79 = 1.1879%), `accounting_complete`; plus `data_as_of`, `coverage_start`, `approximate: true`, `boundary_tolerance_seconds: 60`. Three periods returned for the last 7 days. Each period also has `breakdowns[]` of the same basis points by `thread_source` (`user`, `guardian_review`, `thread_title`) and by `turn_trigger` (`user`, `exec`) **[verified 2026-10-08]**. |
 | `POST usage/thread_usage/query_v2` | ⚠️ 200 | Per thread: `five_hour_limit_percent`, `weekly_limit_percent`, amounts, per-model groups **[source]** — but `data_status: "unavailable"` for all 6 threads tried, old and new |
 | `POST usage/thread_usage/query` | ❌ 403 | Per-thread estimated USD **[source]** |
 | `POST usage/thread-estimates/query` | ❌ 403 | Per-turn estimated USD **[source]** |
@@ -263,6 +265,18 @@ Called directly by the Codex TUI and backend client, not exposed through app-ser
 | `GET usage/credit-usage-events` | ❌ 200 | Empty list on a Plus account |
 
 `plan_limit_history` is **the only fractional quota source for either agent**, and the only one that can be read retroactively (7 days). Two more facts it revealed **[verified 2026-09-30]**: the whole percent every live Codex source reports is `round(used_basis_points / 100)` (118.79 → 1, 806.21 → 8, 164.90 → 2), and `ends_at` is a window's *real* end — a 7-day window whose live readings all said `resetsAt` 09-28 09:05 actually ended 09-26 17:09, an early reset no live reading shows.
+
+### 4.5 No dollar amount anywhere [verified 2026-10-08]
+
+Every key of every raw Codex source, conversation text excluded, scanned for `cost|usd|dollar|price|credit|spend|amount|balance|bill|charge|cents|currency`: 77 session files (2,904 `token_count` events), 6,985 app-server rate-limit readings, all `plan_limit_history` rows, Codex's own `~/.codex/*.sqlite` schemas (`state_5`, `logs_2`, `goals_1`, `memories_1`, `queue_1`, `thread_history_1`) and `~/.codex/models_cache.json` (no prices).
+
+| Money-like key | Where | Value on this account |
+|---|---|---|
+| `credits.balance`, `credits.has_credits` / `hasCredits` | `token_count.rate_limits` (§4.1), `account/rateLimits/read` (§4.3) | `"0"`, `false` in every reading |
+| `spendControlReached` / `spend_control_reached` | same | `false` / `null` |
+| `rateLimitResetCredits.credits` | `account/rateLimits/read` | `null` |
+
+These describe usage credits bought beyond the plan (none here), not the cost of usage. The per-thread and per-turn USD of §4.3 and §4.4 are `null` or 403. So Codex usage exists only as **tokens** (per turn) and **quota percent / basis points** (per window).
 
 ---
 
@@ -296,7 +310,7 @@ Observed 09-07 19:20, 09-15 09:14, 09-19 11:24, then **04:13 and 09:05 for the s
 - **Account-wide spend** for either agent, and **account-wide tokens** for Claude.
 - **Quota percent per session or thread.** Codex's `thread_usage/query_v2` has the fields but returns `unavailable`.
 - **Fractional quota for Claude.** The headers carry whole percents.
-- **Codex spend at any granularity** on a Plus account (403 or `null` everywhere).
+- **Codex spend at any granularity** on a Plus account (403 or `null` everywhere, §4.5).
 - **The conversion factor between one saturated 5-hour window and the 7-day meter.** Unpublished; `CONCLUSIONS.md` estimates it (Claude ≈ 8.85 windows/week, Codex ≈ 6.2).
 - **Demand above the cap.** When a window saturates, what the user *wanted* is unrecorded — only what they were allowed to spend. 5 of 35 Claude windows reached 100%, ≈ 4 hours at the cap over 30 days **[verified]**.
 
@@ -315,6 +329,7 @@ Observed 09-07 19:20, 09-15 09:14, 09-19 11:24, then **04:13 and 09:05 for the s
 | Fractional percent anywhere | Scan `used_percent`, `usedPercent`, `utilization`, `five_hour_pct` for non-integers |
 | Codex app-server methods | Spawn `codex app-server --stdio`, send `initialize`, `initialized`, then the method; for notifications run a `thread/start` + `turn/start` |
 | Codex backend endpoints | `curl` the paths in §4.4 with the bearer token and `ChatGPT-Account-Id` from `~/.codex/auth.json` |
+| No Codex dollar amount (§4.5) | Walk every JSON key path of the session files (skipping `response_item` and message events), of `account_quotas.raw` in `data/codex/account_quotas.db` and of `~/.codex/*.json`, plus `sqlite3 ~/.codex/<db>.sqlite .schema`, and grep the money-like names above |
 | Upstream field types | Sparse-clone `openai/codex` and grep `used_percent` in `codex-rs/protocol` and `codex-rs/app-server-protocol` |
 
 When any of this changes, update this file and its "Last tested" line.

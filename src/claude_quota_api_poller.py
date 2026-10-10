@@ -18,7 +18,8 @@ year). Only log what can't be recomputed after the fact.
 When to poll is not decided here: the job-runner entrypoint claude-quota.sh
 (deployed to ~/opt/agent-usage-tracker/, run every 60s by its trigger) skips
 while state/quota/claude is fresh enough, and waits out a 429's Retry-After
-on every machine (this poller exits 75 with "retry-after N" as its last
+on this machine only - 429s are counted per login token, i.e. per machine
+(USAGE_DATA_SOURCES.md §3.5) - (this poller exits 75 with "retry-after N" as its last
 line). One start = one attempt, unless --peer finds a fresh reading first.
 
 The MacBook runs it with --peer=H-Frank-1 (the VM cannot reach the Mac, so
