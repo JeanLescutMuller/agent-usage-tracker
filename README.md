@@ -18,7 +18,7 @@ All usage data lives in two SQLite databases per agent, split by **scope**: `dat
 ## Usage
 
 ```bash
-bash install.sh     # idempotent; requires python3; LaunchAgents on macOS, systemd --user units on Linux
+bash install.sh     # idempotent; requires python3 and job-runner (~/opt/job-runner/lib.sh); LaunchAgents on macOS, systemd --user units on Linux
 bash uninstall.sh   # removes what install.sh deploys; preserves data/; flags anything else left over
 ```
 
@@ -43,11 +43,11 @@ transcript_reader.py (every 5 min) ──────┘
 | Collector | Runs | Source | Hands to |
 |---|---|---|---|
 | `statusline_payload_reader.py` (run by `bin/ingest-claude-statusline.sh`) | Every Claude status-line render, before the display (about 28 ms) | Statusline stdin: `rate_limits`, session cost, `prompt_cache`, model | Account gate (source `claude_statusline`) and sessions gate (snapshot). Nothing when the transcript has no `assistant` entry to date the reading; repeats of the same session's reading are skipped |
-| `claude_quota_api_poller.py` | LaunchAgent, 60 s tick (`run_pollers.py`); polls every 120 s while a Claude status line is on screen, else every ~5 min | `GET /api/oauth/usage` | Account gate (`claude_api`); a failed attempt goes to the `poll_errors` table |
-| `codex_quota_api_poller.py` | Same tick; skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
-| `codex_plan_history_poller.py` | Same tick; one fetch a day | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
+| `claude_quota_api_poller.py` | Job `claude-quota` (Mac and VM, 60 s tick): polls when `state/quota/claude` is older than 110 s (Mac) / 170 s (VM) while a Claude status line is on screen, else 300 s / 360 s; a 429 waits its Retry-After on both machines. The Mac first takes the VM's fresh reading, and hands the VM its own (`--peer`) | `GET /api/oauth/usage` | Account gate (`claude_api`); a failed attempt goes to the `poll_errors` table |
+| `codex_quota_api_poller.py` | Job `codex-quota` (Mac, 60 s tick); skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
+| `codex_plan_history_poller.py` | Job `codex-plan-history` (Mac, hourly tick); one fetch a day, 1 h after a failure | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
 | `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
-| `transcript_reader.py` | Its own LaunchAgent, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Sessions gate (`requests` table of each agent): one row per Claude API request once it is 15 min old, one per Codex turn |
+| `transcript_reader.py` | Job `transcripts`, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Sessions gate (`requests` table of each agent): one row per Claude API request once it is 15 min old, one per Codex turn |
 | `receive_from_machine.py` | On the VM, run over ssh by another machine's `push_to_central.py` | That machine's new rows | Both gates, into `central/<machine>/` (see "Central store on the VM") |
 
 Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
@@ -75,7 +75,7 @@ Deploying to the VM (development stays on the Mac):
 rsync -a --delete --exclude .git --exclude __pycache__ ./ H-Frank-1:dev/agent-usage-tracker/ && ssh H-Frank-1 'bash ~/dev/agent-usage-tracker/install.sh'
 ```
 
-On the VM, the Codex pollers skip (Codex is not installed there), and the Claude poller reads the token from `~/.claude/.credentials.json`, so Claude Code must be logged in there.
+On the VM, there are no Codex jobs (Codex is not installed there), and the Claude poller reads the token from `~/.claude/.credentials.json`, so Claude Code must be logged in there.
 
 ## Contract with agent-statusline
 
@@ -84,8 +84,8 @@ The two projects share exactly three files, each written by one side only. Neith
 | Interface | Written by | Read by | What |
 |---|---|---|---|
 | `~/opt/agent-usage-tracker/bin/ingest-claude-statusline.sh` | this repo (deployed) | agent-statusline's Claude provider runs it | The Claude provider pipes its raw stdin payload in, unchanged, on every render, before display. Which fields are kept, and where, is this repo's business only. Runs `statusline_payload_reader.py` in the foreground (about 28 ms), so the render that brings a new reading displays it. Always exits 0; its output is ignored. |
-| `~/opt/agent-usage-tracker/state/quota/claude` | the account gate, for `claude_statusline` and `claude_api` readings | agent-statusline's Claude provider, whatever the source; also `auto-apply` (`runner/limits.py`) and `smart-orchestrator` (`so.py`) | The freshest known 5h/7d reading: six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded. Each writer overwrites only if its `observed_at` is newer, so every open session converges on the account's freshest reading. `source` is information only. A push reading is dated by its transcript's last `assistant` entry and is never written undated, so an idle session's frozen reading can't win. |
-| `~/opt/agent-statusline/state/heartbeat/{claude,codex}` | agent-statusline, every render | `claude_quota_api_poller.py`, `codex_quota_api_poller.py` | Only the mtime matters: a status line is on screen, so poll faster. Missing = idle cadence. |
+| `~/opt/agent-usage-tracker/state/quota/claude` | the account gate, for `claude_statusline` and `claude_api` readings | agent-statusline's Claude provider, whatever the source; also `auto-apply` (`runner/limits.py`) and this repo's `claude-quota.sh` (its age decides when to poll) | The freshest known 5h/7d reading: six `$'\034'`-separated fields, `five_pct five_reset week_pct week_reset source observed_at`, percents rounded. Each writer overwrites only if its `observed_at` is newer, so every open session converges on the account's freshest reading. `source` is information only. A push reading is dated by its transcript's last `assistant` entry and is never written undated, so an idle session's frozen reading can't win. |
+| `~/opt/agent-statusline/state/heartbeat/{claude,codex}` | agent-statusline, every render | `claude-quota.sh`, `codex_quota_api_poller.py` | Only the mtime matters: a status line is on screen, so poll faster. Missing = idle cadence. |
 
 Without agent-statusline there are no push rows: Claude Code runs a single `statusLine` command, so nothing else can feed the ingest script. Claude's meter history then comes only from the poller, on its ~5 min idle cadence and subject to its 429s, and there are no session cost or `prompt_cache` rows. Codex is unaffected. What the status line shows without this repo is agent-statusline's business.
 
@@ -93,7 +93,8 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
 
     ~/opt/agent-usage-tracker/
     ├── bin/ingest-claude-statusline.sh   the statusline's entry point (see the contract above)
-    ├── src/                              usage_db.py, the two ingest_*.py gates, the collectors, run_pollers.py
+    ├── {claude-quota,codex-quota,codex-plan-history,transcripts,push}.sh   the jobs' job-runner entrypoints (from jobs/; Linux: no Codex jobs)
+    ├── src/                              usage_db.py, the two ingest_*.py gates, the collectors
     ├── data/                             see USAGE_DATA_REFERENCE.md §1
     │   ├── claude/
     │   │   ├── account_quotas.db         account scope: Claude readings (quota percent), failed poll attempts
@@ -107,8 +108,8 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
     │   ├── transcript_reader/offsets.json  how far each transcript has been read
     │   └── push/watermarks.json            last rowid confirmed by the VM, per table
     ├── central/<machine>/data/<agent>/   on the VM only: every machine's pushed copy
-    ├── logs/                             quota-poll, otel-receiver, transcript-reader, push (.log / .err)
-    └── com.jeanlescut.agent-usage-tracker{,.otel,.transcripts,.push}.plist   LaunchAgents, symlinked from ~/Library/LaunchAgents/
+    ├── logs/                             otel-receiver (.log / .err); each job's checks are logged by job-runner (~/opt/job-runner/logs/agent-usage-tracker.<job>/)
+    └── com.jeanlescut.agent-usage-tracker.{otel,<job>}.plist   LaunchAgents, symlinked from ~/Library/LaunchAgents/
                                           (Linux: the same names as .service/.timer, symlinked from ~/.config/systemd/user/)
 
 `adhoc_quotas_analysis/` is run-by-hand research, never deployed: it stays in `~/dev/agent-usage-tracker` and reads `~/opt/agent-usage-tracker/data/` from there.

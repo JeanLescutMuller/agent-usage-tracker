@@ -22,9 +22,12 @@ ids and isn't part of "the current rate-limit snapshot", the same
 "unrecoverable" bar claude_quota_api_poller.py applies. That's future work for a
 Codex reader of ~/.codex/sessions, not this poller.
 
-The shared LaunchAgent tick is 60s. Three cadence tiers, checked in order,
-mirroring claude_quota_api_poller.py's heartbeat-driven speedup but adding a tier it
-has no equivalent of:
+Its trigger ticks every 60s (com.jeanlescut.agent-usage-tracker.codex-quota,
+running the job-runner entrypoint codex-quota.sh). A skip exits 10 after
+its "skip: ..." line, so job-runner records a Skip, not a success. Three
+cadence tiers, checked in order, mirroring the Claude poller's
+heartbeat-driven speedup (decided in its entrypoint, claude-quota.sh) but
+adding a tier it has no equivalent of:
 
 1. A local Codex session file was modified within SESSION_FRESH_SECONDS -
    an active session already writes its own rate_limits snapshot to
@@ -40,7 +43,7 @@ has no equivalent of:
    HEARTBEAT_ACTIVE_WINDOW_SECONDS - a statusline is open and idle, so the
    local file above is stale, but someone is watching and other
    sessions/devices on the account can still move the meter. Poll at
-   WATCHED_POLL_INTERVAL_SECONDS, which must equal the LaunchAgent's own
+   WATCHED_POLL_INTERVAL_SECONDS, which must equal the trigger's own
    tick exactly (60s) - a slower threshold degrades to half the intended
    cadence, since the skip window then spans more than one tick and never
    clears it on a single tick's elapsed time (proven during
@@ -59,6 +62,7 @@ tier 3 if the statusline is not installed.
 import json
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -71,7 +75,7 @@ HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat
 # See the module docstring for the three-tier gating these constants drive.
 SESSION_FRESH_SECONDS = 300
 HEARTBEAT_ACTIVE_WINDOW_SECONDS = 90
-WATCHED_POLL_INTERVAL_SECONDS = 60  # must equal the LaunchAgent's StartInterval exactly
+WATCHED_POLL_INTERVAL_SECONDS = 60  # must equal the trigger's StartInterval exactly
 IDLE_POLL_INTERVAL_SECONDS = 300
 
 # launchd runs jobs with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
@@ -212,20 +216,20 @@ def main() -> None:
     # A machine without Codex (the VM) is not a failure to record every tick.
     if not Path(CODEX_BIN).exists():
         print(f"skip: no codex binary ({CODEX_BIN})")
-        return
+        sys.exit(10)
 
     now = time.time()
     if _codex_session_recently_active(now):
         print(f"skip: a Codex session file was modified under {SESSION_FRESH_SECONDS}s ago "
               f"- local rate_limits snapshot is already fresher than a poll would be")
-        return
+        sys.exit(10)
     is_watched = is_fresh(HEARTBEAT_FILE, HEARTBEAT_ACTIVE_WINDOW_SECONDS, now)
     threshold = WATCHED_POLL_INTERVAL_SECONDS if is_watched else IDLE_POLL_INTERVAL_SECONDS
     last_ts = _last_codex_log_ts()
     if last_ts is not None and (now - last_ts) < threshold:
         print(f"skip: last codex reading is under {threshold}s old "
               f"({'watched' if threshold == WATCHED_POLL_INTERVAL_SECONDS else 'idle'})")
-        return
+        sys.exit(10)
 
     d_rate_limits, d_usage, d_error = fetch_codex_state()
 

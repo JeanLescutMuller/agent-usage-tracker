@@ -16,15 +16,16 @@ Codex itself uses from ~/.codex/auth.json. Read-only; the token is never
 logged. Codex refreshes that token when it runs; if it has expired, the
 row records the HTTP 401 and the next attempt retries.
 
-Cadence: the LaunchAgent ticks every 60s (via run_pollers.py), but this
-only calls the backend when the last attempt (read back from the database,
-reading or failure) is SUCCESS_INTERVAL_SECONDS old after a success, or
-RETRY_INTERVAL_SECONDS old after a failure.
+Cadence: not decided here. Its job-runner entrypoint codex-plan-history.sh
+(an hourly trigger) runs it once per 24 h after a success, 1 h after a
+failure, from job-runner's own statuses: so this exits 0 when the history
+was stored, 1 when the attempt failed (the failure is still stored).
 
 These rows carry no current reading, so their percent columns are NULL and
 the `latest` view skips them.
 """
 import json
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -36,8 +37,6 @@ import usage_db
 AUTH_FILE = Path.home() / ".codex" / "auth.json"
 URL = "https://chatgpt.com/backend-api/wham/usage/plan_limit_history?days=7"
 
-SUCCESS_INTERVAL_SECONDS = 86400
-RETRY_INTERVAL_SECONDS = 3600
 HTTP_TIMEOUT_S = 15
 
 
@@ -78,13 +77,6 @@ def main() -> None:
     if not AUTH_FILE.parent.is_dir():
         print(f"skip: no {AUTH_FILE.parent}")
         return
-    now = time.time()
-    d_last = ingest_account_quota.last_attempt(usage_db.open_account("codex", readonly=True), ("codex_plan_limit_history",))
-    if d_last is not None:
-        interval = SUCCESS_INTERVAL_SECONDS if d_last["error"] is None else RETRY_INTERVAL_SECONDS
-        if now - d_last["ts"] < interval:
-            print(f"skip: last plan-history attempt is under {interval}s old")
-            return
 
     d_history, d_error = fetch_plan_history()
     d_record = {
@@ -95,6 +87,10 @@ def main() -> None:
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
     ingest_account_quota.add_row(usage_db.open_account("codex"), "codex", d_record)
+    if d_error is not None:
+        print("failed: " + " ".join(str(d_error[k]) for k in ("stage", "type", "status") if d_error.get(k) is not None))
+        sys.exit(1)
+    print("plan-limit history stored")
 
 
 if __name__ == "__main__":

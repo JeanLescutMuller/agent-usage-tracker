@@ -17,13 +17,16 @@ A failed poll attempt (`error` set) goes to the poll_errors table instead.
 
 Claude readings also refresh state/quota/claude - six fields separated by
 \\x1c: five_pct five_reset week_pct week_reset source observed_at - when
-newer than what it holds. agent-statusline, auto-apply and smart-orchestrator
-read that file (README.md's "Contract with agent-statusline").
+newer than what it holds. agent-statusline, auto-apply and the claude-quota
+entrypoint read that file (README.md's "Contract with agent-statusline").
 
 Command line (migration, and later the VM push): one JSONL row per stdin
 line, inserted with the line itself as `raw`:
     ingest_account_quota.py --agent claude [--no-dedup] < rows.jsonl
 prints {"inserted": n, "duplicate": n, "redundant": n, "rejected": n}.
+    ingest_account_quota.py --agent claude --latest
+prints the freshest reading's raw row (the `latest` view's), or nothing.
+Both are what the MacBook's claude_quota_api_poller.py --peer runs on the VM.
 """
 import json
 import math
@@ -192,13 +195,26 @@ def last_attempt(db, sources: tuple[str, ...] | None = None) -> dict | None:
     return None if reading is None else {"ts": reading, "error": None}
 
 
+def latest_raw(db) -> str | None:
+    """The raw row of the freshest reading, any source: the `latest` view's row."""
+    if db is None:
+        return None
+    row = db.execute("SELECT raw FROM account_quotas WHERE five_hour_pct IS NOT NULL OR seven_day_pct IS NOT NULL "
+                     "ORDER BY ts DESC, rowid DESC LIMIT 1").fetchone()
+    return row[0] if row else None
+
+
 def main() -> None:
     import argparse  # here, not at the top: the statusline path never needs it
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--agent", required=True, choices=usage_db.AGENTS)
     parser.add_argument("--no-dedup", action="store_true", help="keep repeated statusline readings (history as is)")
     parser.add_argument("--no-state", action="store_true", help="do not touch state/quota/claude")
+    parser.add_argument("--latest", action="store_true", help="print the freshest reading's raw row, store nothing")
     args = parser.parse_args()
+    if args.latest:
+        print(latest_raw(usage_db.open_account(args.agent, readonly=True)) or "")
+        return
     db = usage_db.open_account(args.agent)
     d_counts = {"inserted": 0, "duplicate": 0, "redundant": 0, "rejected": 0}
     db.execute("BEGIN IMMEDIATE")

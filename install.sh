@@ -11,11 +11,15 @@
 #   (the separate agent-statusline project) pipes its stdin payload into;
 # - src/*.py: the two gates (ingest_*.py, the only writers of the
 #   databases), the collectors, and usage_db.py;
-# - four scheduled jobs: the pollers (60s tick), the telemetry receiver
-#   (always running), the transcript reader and the push to the central
-#   store on the VM (every 5 min) - LaunchAgents on macOS, systemd --user
-#   units on Linux (the VM) - plus the telemetry keys in
-#   ~/.claude/settings.json's `env`.
+# - the jobs' job-runner entrypoints (<job>.sh, from jobs/) and one trigger
+#   each, com.jeanlescut.agent-usage-tracker.<job>: claude-quota (60s tick),
+#   transcripts and push (every 5 min), and on macOS only codex-quota (60s)
+#   and codex-plan-history (hourly); each entrypoint decides, works and
+#   records its checks through job-runner (separate project,
+#   ~/opt/job-runner/lib.sh);
+# - the telemetry receiver, a service (always running, no job-runner);
+#   LaunchAgents on macOS, systemd --user units on Linux (the VM) - plus the
+#   telemetry keys in ~/.claude/settings.json's `env`.
 # The databases (data/<agent>/account_quotas.db, sessions_usages.db) are
 # created by the gates on first write.
 # Does NOT deploy adhoc_quotas_analysis/: run-by-hand research tooling stays
@@ -25,6 +29,8 @@
 # Independent of agent-statusline: either can be installed first, or alone.
 # Without the statusline there are no push rows and the Claude poller stays
 # on its idle cadence (README.md's "Contract with agent-statusline").
+# Without job-runner the triggers run, but every check fails until it is
+# installed.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -56,11 +62,18 @@ _deploy() {
     installed "$(basename "$target")"
 }
 
+# A template with its placeholders filled: this machine's interpreter, the
+# runtime tree, and for a job's trigger $JOB and $INTERVAL (seconds).
+_render() {
+    sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" \
+        -e "s#__JOB__#${JOB:-}#g" -e "s#__INTERVAL__#${INTERVAL:-}#g" "$1"
+}
+
 # Like _deploy, with __PYTHON3__ replaced by this machine's interpreter.
 _deploy_rendered() {
     local src="$1" target="$2" tmp
     tmp="$(mktemp)"
-    sed -e "s#__PYTHON3__#$PYTHON3#g" "$src" > "$tmp"
+    _render "$src" > "$tmp"
     _deploy "$tmp" "$target"
     rm -f "$tmp"
 }
@@ -73,7 +86,7 @@ _launch_agent() {
     local real="$RUNTIME/$label.plist" link="$LAUNCH_AGENTS/$label.plist" tmp
     mkdir -p "$LAUNCH_AGENTS"
     tmp="$(mktemp)"
-    sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" "$template" > "$tmp"
+    _render "$template" > "$tmp"
     if [ -f "$real" ] && diff -q "$tmp" "$real" >/dev/null 2>&1; then
         rm -f "$tmp"
         ok "$label"
@@ -88,18 +101,19 @@ _launch_agent() {
     fi
 }
 
-# Renders a systemd --user unit (and its timer, if the job has one) into the
-# runtime tree (the real files), symlinks them from ~/.config/systemd/user,
-# then enables and (re)starts them - always restarting, so redeployed code
-# takes effect. Linger lets them run without a login session (best effort).
+# Renders a systemd --user unit (and its timer, if the job has one) from
+# src/systemd/<template>.{service,timer} into the runtime tree (the real
+# files), symlinks them from ~/.config/systemd/user, then enables and
+# (re)starts them - always restarting, so redeployed code takes effect.
+# Linger lets them run without a login session (best effort).
 _systemd_unit() {
-    local label="$1" what="$2" kind real link tmp changed=false
+    local template="$1" label="$2" what="$3" kind real link tmp changed=false
     mkdir -p "$SYSTEMD_USER"
     for kind in service timer; do
-        [ -f "$SCRIPT_DIR/src/systemd/$label.$kind" ] || continue
+        [ -f "$SCRIPT_DIR/src/systemd/$template.$kind" ] || continue
         real="$RUNTIME/$label.$kind" link="$SYSTEMD_USER/$label.$kind"
         tmp="$(mktemp)"
-        sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" "$SCRIPT_DIR/src/systemd/$label.$kind" > "$tmp"
+        _render "$SCRIPT_DIR/src/systemd/$template.$kind" > "$tmp"
         if [ -f "$real" ] && diff -q "$tmp" "$real" >/dev/null 2>&1; then
             rm -f "$tmp"
         else
@@ -120,13 +134,20 @@ _systemd_unit() {
     fi
 }
 
+# _schedule TEMPLATE LABEL WHAT: src/launchd/TEMPLATE.plist.template or
+# src/systemd/TEMPLATE.{service,timer}, as the trigger LABEL.
 _schedule() {
     if [ "$OS" = Darwin ]; then
-        _launch_agent "$SCRIPT_DIR/src/launchd/$1.plist.template" "$1" "$2"
+        _launch_agent "$SCRIPT_DIR/src/launchd/$1.plist.template" "$2" "$3"
     else
-        _systemd_unit "$1" "$2"
+        _systemd_unit "$1" "$2" "$3"
     fi
 }
+
+# Each job: name, its trigger's interval in seconds (as in the header of its
+# entrypoint, jobs/<job>.sh). The Codex jobs only where Codex is (the Mac).
+JOBS="claude-quota:60 transcripts:300 push:300"
+[ "$OS" = Darwin ] && JOBS="$JOBS codex-quota:60 codex-plan-history:3600"
 
 step "runtime layout"
 # data/<agent>/account_quotas.db + sessions_usages.db - see
@@ -142,11 +163,15 @@ for f in "$SCRIPT_DIR"/src/*.py; do
     _deploy "$f" "$RUNTIME/src/$(basename "$f")"
 done
 
-step "scheduled jobs ($([ "$OS" = Darwin ] && echo LaunchAgents || echo 'systemd --user'))"
-_schedule com.jeanlescut.agent-usage-tracker "pollers: ticks every 60s, every poller self-throttles"
-_schedule com.jeanlescut.agent-usage-tracker.otel "telemetry receiver on 127.0.0.1:4318"
-_schedule com.jeanlescut.agent-usage-tracker.transcripts "transcript reader, every 5 min"
-_schedule com.jeanlescut.agent-usage-tracker.push "push to the central store on the VM, every 5 min"
+step "jobs and their triggers ($([ "$OS" = Darwin ] && echo LaunchAgents || echo 'systemd --user'))"
+for entry in $JOBS; do
+    JOB="${entry%%:*}" INTERVAL="${entry#*:}"
+    _deploy "$SCRIPT_DIR/jobs/$JOB.sh" "$RUNTIME/$JOB.sh"
+    _schedule job "com.jeanlescut.agent-usage-tracker.$JOB" "$JOB.sh every ${INTERVAL}s"
+done
+JOB="" INTERVAL=""
+_schedule com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.otel "telemetry receiver on 127.0.0.1:4318"
+[ -f "$HOME/opt/job-runner/lib.sh" ] || skip "job-runner is not installed (~/opt/job-runner/lib.sh missing): every check fails until it is"
 
 if [ "$OS" != Darwin ] && [ -z "${AGENT_USAGE_TRACKER_SKIP_LAUNCHD:-}" ]; then
     loginctl enable-linger "$(id -un)" 2>/dev/null || true

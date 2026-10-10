@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- The trigger of one job (install.sh renders __JOB__ and __INTERVAL__):
+         runs its job-runner entrypoint __RUNTIME__/__JOB__.sh every
+         __INTERVAL__ s, which decides, works and records each check (logs
+         and statuses under ~/opt/job-runner/). launchd fires once on wake
+         when a tick was missed during sleep. -->
+    <key>Label</key>
+    <string>com.jeanlescut.agent-usage-tracker.__JOB__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__RUNTIME__/__JOB__.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>__INTERVAL__</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- job-runner runs the work in its own process group, with its own timeout. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

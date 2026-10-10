@@ -1,6 +1,6 @@
 #!/bin/bash
-# Removes everything install.sh deploys: the scheduled jobs (LaunchAgents or
-# systemd --user units), the telemetry
+# Removes everything install.sh deploys: the jobs' entrypoints and triggers
+# and the telemetry receiver (LaunchAgents or systemd --user units), the telemetry
 # keys in ~/.claude/settings.json's `env` (only those still holding our
 # values), and the code/state/logs under ~/opt/agent-usage-tracker.
 #
@@ -22,7 +22,9 @@ source "$SCRIPT_DIR/utils.sh"
 
 RUNTIME="$HOME/opt/agent-usage-tracker"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
-LABELS="com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.transcripts com.jeanlescut.agent-usage-tracker.push"
+JOBS="claude-quota codex-quota codex-plan-history transcripts push"   # as in install.sh
+LABELS="com.jeanlescut.agent-usage-tracker.otel"
+for job in $JOBS; do LABELS="$LABELS com.jeanlescut.agent-usage-tracker.$job"; done
 SYSTEMD_USER="$HOME/.config/systemd/user"
 OS="${AGENT_USAGE_TRACKER_OS:-$(uname -s)}"
 
@@ -68,6 +70,9 @@ if [ -d "$RUNTIME" ]; then
     known_targets="bin src state logs"
     for target in $known_targets; do
         rm -rf "${RUNTIME:?}/$target"
+    done
+    for job in $JOBS; do
+        rm -f "${RUNTIME:?}/$job.sh"
     done
     installed "removed deployed code, state and logs"
     # rmdir only succeeds on an empty directory - real history is kept.

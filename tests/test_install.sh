@@ -16,7 +16,7 @@ run_script() {
 }
 new_home() { mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-installhome.XXXXXX"; }
 
-section "install deploys the ingest script, gates, collectors and the three LaunchAgents"
+section "install deploys the ingest script, gates, collectors, the job entrypoints and their LaunchAgents"
 th_home="$(new_home)"
 RT="$th_home/opt/agent-usage-tracker"
 run_script install.sh "$th_home"
@@ -25,7 +25,7 @@ assert_file_exists "ingest script deployed" "$RT/bin/ingest-claude-statusline.sh
 [ -x "$RT/bin/ingest-claude-statusline.sh" ]
 assert_status "ingest script is executable (agent-statusline checks -x)" 0 $?
 for f in usage_db.py ingest_account_quota.py ingest_session_usage.py statusline_payload_reader.py \
-    claude_quota_api_poller.py codex_quota_api_poller.py codex_plan_history_poller.py run_pollers.py \
+    claude_quota_api_poller.py codex_quota_api_poller.py codex_plan_history_poller.py \
     telemetry_receiver.py transcript_reader.py; do
     assert_file_exists "$f deployed" "$RT/src/$f"
 done
@@ -35,20 +35,21 @@ assert_file_missing "no database before the first write" "$RT/data/claude/accoun
 assert_file_exists "data/claude/ created" "$RT/data/claude"
 assert_file_exists "data/codex/ created" "$RT/data/codex"
 assert_file_missing "adhoc_quotas_analysis/ is run-by-hand, never deployed" "$RT/adhoc_quotas_analysis"
-assert_contains "poll plist points at run_pollers.py" \
-    "$(cat "$RT/com.jeanlescut.agent-usage-tracker.plist")" "$RT/src/run_pollers.py"
-assert_eq "poll plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.plist" \
-    "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.plist")"
+for job in claude-quota:60 codex-quota:60 codex-plan-history:3600 transcripts:300 push:300; do
+    label="com.jeanlescut.agent-usage-tracker.${job%%:*}"
+    assert_file_exists "${job%%:*}.sh entrypoint deployed" "$RT/${job%%:*}.sh"
+    assert_contains "$label runs its entrypoint with /bin/bash" "$(cat "$RT/$label.plist")" \
+        "<string>/bin/bash</string>
+        <string>$RT/${job%%:*}.sh</string>"
+    assert_contains "$label every ${job#*:}s" "$(cat "$RT/$label.plist")" "<integer>${job#*:}</integer>"
+    assert_eq "$label symlinked into ~/Library/LaunchAgents" "$RT/$label.plist" "$(readlink "$th_home/Library/LaunchAgents/$label.plist")"
+done
+assert_file_missing "no single pollers trigger any more" "$RT/com.jeanlescut.agent-usage-tracker.plist"
+assert_not_contains "placeholders all rendered" "$(cat "$RT"/*.plist)" "__"
 assert_file_missing "the settings merge helper runs from the repo, never deployed" "$RT/src/merge_claude_env.py"
 assert_contains "receiver plist keeps it alive" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.otel.plist")" "<key>KeepAlive</key>"
 assert_eq "receiver plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.otel.plist" \
     "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.otel.plist")"
-assert_contains "transcript reader plist runs every 5 min" \
-    "$(cat "$RT/com.jeanlescut.agent-usage-tracker.transcripts.plist")" "<integer>300</integer>"
-assert_eq "transcript reader plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.transcripts.plist" \
-    "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.transcripts.plist")"
-assert_eq "push plist symlinked into ~/Library/LaunchAgents" "$RT/com.jeanlescut.agent-usage-tracker.push.plist" \
-    "$(readlink "$th_home/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.push.plist")"
 assert_file_missing "no systemd units on macOS" "$th_home/.config/systemd"
 assert_eq "telemetry env vars merged into ~/.claude/settings.json" \
     "$(jq -cS . "$REPO_ROOT/src/claude_telemetry_env.json")" "$(jq -cS .env "$th_home/.claude/settings.json")"
@@ -90,7 +91,8 @@ th_home="$(new_home)"
 run_script install.sh "$th_home"
 run_script uninstall.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
-for label in com.jeanlescut.agent-usage-tracker com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.transcripts com.jeanlescut.agent-usage-tracker.push; do
+for label in com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.claude-quota com.jeanlescut.agent-usage-tracker.codex-quota \
+    com.jeanlescut.agent-usage-tracker.codex-plan-history com.jeanlescut.agent-usage-tracker.transcripts com.jeanlescut.agent-usage-tracker.push; do
     assert_file_missing "$label symlink removed" "$th_home/Library/LaunchAgents/$label.plist"
 done
 assert_file_missing "the whole runtime dir is gone when data/ was never populated" "$th_home/opt/agent-usage-tracker"
@@ -125,17 +127,21 @@ UNITS="$th_home/.config/systemd/user"
 TH_OUT="$(HOME="$th_home" AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1 AGENT_USAGE_TRACKER_OS=Linux bash "$REPO_ROOT/install.sh" 2>&1)"
 assert_status "exits 0" 0 $?
 assert_file_missing "no LaunchAgents" "$th_home/Library/LaunchAgents"
-for unit in com.jeanlescut.agent-usage-tracker.service com.jeanlescut.agent-usage-tracker.timer \
+for unit in com.jeanlescut.agent-usage-tracker.claude-quota.service com.jeanlescut.agent-usage-tracker.claude-quota.timer \
     com.jeanlescut.agent-usage-tracker.otel.service \
     com.jeanlescut.agent-usage-tracker.transcripts.service com.jeanlescut.agent-usage-tracker.transcripts.timer \
     com.jeanlescut.agent-usage-tracker.push.service com.jeanlescut.agent-usage-tracker.push.timer; do
     assert_eq "$unit: real file in the runtime, symlink in ~/.config/systemd/user" "$RT/$unit" "$(readlink "$UNITS/$unit")"
 done
-assert_contains "service runs the deployed script with this machine's python" \
-    "$(cat "$RT/com.jeanlescut.agent-usage-tracker.push.service")" "ExecStart=$(command -v python3) $RT/src/push_to_central.py"
+assert_contains "a job's service runs its entrypoint with /bin/bash" \
+    "$(cat "$RT/com.jeanlescut.agent-usage-tracker.push.service")" "ExecStart=/bin/bash $RT/push.sh"
+assert_file_exists "push.sh entrypoint deployed" "$RT/push.sh"
+assert_file_missing "no Codex jobs on Linux" "$RT/com.jeanlescut.agent-usage-tracker.codex-quota.service"
+assert_file_missing "no Codex entrypoint on Linux" "$RT/codex-quota.sh"
 assert_not_contains "placeholders all rendered" "$(cat "$RT"/*.service "$RT"/*.timer)" "__"
 assert_contains "the receiver restarts if it exits" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.otel.service")" "Restart=always"
-assert_contains "the pollers tick every 60s" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.timer")" "OnUnitActiveSec=60s"
+assert_contains "claude-quota ticks every 60s" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.claude-quota.timer")" "OnUnitActiveSec=60s"
+assert_contains "push every 5 min" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.push.timer")" "OnUnitActiveSec=300s"
 mkdir -p "$RT/central/some-mac/data/claude" && printf 'db' > "$RT/central/some-mac/data/claude/account_quotas.db"
 TH_OUT="$(HOME="$th_home" AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1 AGENT_USAGE_TRACKER_OS=Linux bash "$REPO_ROOT/uninstall.sh" 2>&1)"
 assert_eq "uninstall removes the unit symlinks" "" "$(ls "$UNITS" 2>/dev/null)"

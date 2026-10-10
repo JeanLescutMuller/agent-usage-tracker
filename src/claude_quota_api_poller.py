@@ -15,25 +15,26 @@ would just be storing a copy of data that already durably exists elsewhere
 on disk (cleanupPeriodDays=365 on this machine, so "durably" means about a
 year). Only log what can't be recomputed after the fact.
 
-The LaunchAgent ticks this every 60s (see install.sh), but every tick isn't
-necessarily a real poll: the Claude statusline (the separate
-agent-statusline project) touches a heartbeat file under its own runtime
-tree on every render, and this reads that file's mtime - read-only, the one
-thing this project reads from agent-statusline (README.md's "Contract with
-agent-statusline"). A heartbeat
-younger than ACTIVE_WINDOW_SECONDS means a statusline is being drawn
-somewhere *right now*. If so, poll for real, but at most every
-ACTIVE_INTERVAL_SECONDS (120s, two ticks): at one poll a minute the endpoint
-answered every other request with a 429 carrying Retry-After: 0, so the
-backoff check below never engaged (358 of 778 polls on 2026-10-03/04). If not, only poll if the last logged reading (of either outcome,
-success or error) is already IDLE_INTERVAL_SECONDS old, so a fully idle
-machine still settles to roughly the old flat 5-minute cadence instead of a
-60s busy-loop for no reason. This deliberately does NOT key off
-token/message activity - a usage window resetting to 0% moves the meter with
-zero new tokens spent, so "is anyone even looking at a statusline" is the
-right signal, not "did tokens move." A missing heartbeat file (statusline
-not installed, or never rendered) just means the heartbeat check always
-reports not-fresh, which degrades gracefully to the old flat 5-minute cadence.
+When to poll is not decided here: the job-runner entrypoint claude-quota.sh
+(deployed to ~/opt/agent-usage-tracker/, run every 60s by its trigger) skips
+while state/quota/claude is fresh enough, and waits out a 429's Retry-After
+on every machine (this poller exits 75 with "retry-after N" as its last
+line). One start = one attempt, unless --peer finds a fresh reading first.
+
+The MacBook runs it with --peer=H-Frank-1 (the VM cannot reach the Mac, so
+the Mac does both directions, over ssh, through the VM's own account gate,
+ingest_account_quota.py):
+  1. it first asks the VM for its freshest reading (`--latest`); younger than
+     --fresh-within seconds: stored here through the local gate, exit 10,
+     no API call;
+  2. else it polls, and hands a reading to the VM's gate, which stores it
+     and refreshes the VM's state/quota/claude - so the VM's own check then
+     finds it fresh and skips. A failed attempt stays here.
+The VM unreachable: the Mac goes on alone (a note on stderr).
+
+Exit codes: 0 a reading, its summary last ("5h 42% · 7d 18%"); 10 the
+peer's reading taken; 75 a 429; 1 any other failure (401, network...).
+Every attempt is stored, reading or failure, as before.
 
 Note this poller's own `source: "claude_api"` rows are a fallback path now, not
 the primary one: statusline_payload_reader.py stores a free
@@ -61,16 +62,10 @@ KEYCHAIN_SERVICE = "Claude Code-credentials"
 # Where Claude Code keeps the same credential blob on Linux (no Keychain).
 CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 
-# See the module docstring for the gating rationale. Owned and written by
-# agent-statusline; only read here. Missing = no statusline, idle cadence.
-HEARTBEAT_FILE = Path.home() / "opt" / "agent-statusline" / "state" / "heartbeat" / "claude"
-ACTIVE_WINDOW_SECONDS = 90
-ACTIVE_INTERVAL_SECONDS = 120
-IDLE_INTERVAL_SECONDS = 300
-# launchd ticks are 60s apart but `ts` is stamped after the request returns,
-# so the second tick after a poll sees slightly under 120s; without this
-# slack every watched poll would slip to a third tick (180s).
-TICK_SLACK_SECONDS = 10
+# The peer's account gate, run over ssh (a non-login shell: python3 is
+# /usr/bin/python3 on the VM, as for push_to_central.py).
+PEER_GATE = "python3 ~/opt/agent-usage-tracker/src/ingest_account_quota.py --agent claude"
+PEER_TIMEOUT_S = 20
 
 # Response headers worth keeping - request-id lets a specific reading be
 # cross-referenced/reported to Anthropic support if a number ever looks
@@ -150,7 +145,7 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
         # discarding it (HEADERS_TO_KEEP never covered it, and only the
         # success path even looked at headers) and retrying every 60-300s
         # regardless, almost certainly re-tripping the exact backoff window
-        # the server asked for. _should_poll() now enforces this.
+        # the server asked for. The entrypoint now waits it out (exit 75).
         retry_after = exc.headers.get("Retry-After") if exc.headers else None
         if retry_after is not None:
             try:
@@ -175,56 +170,54 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
                             "detail": str(exc)}
 
 
-def is_fresh(path: Path, window_seconds: float, now: float) -> bool:
-    """True if `path`'s mtime is within window_seconds of now. A missing file
-    is just not fresh, which degrades to the idle cadence."""
+def peer_gate(host: str, args: str = "", stdin: str = "") -> str | None:
+    """Runs HOST's account gate over ssh; its stdout, or None when HOST
+    cannot be reached or the gate failed."""
     try:
-        return (now - path.stat().st_mtime) < window_seconds
-    except OSError:
-        return False
+        result = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, PEER_GATE + args],
+            input=stdin, capture_output=True, text=True, timeout=PEER_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout if result.returncode == 0 else None
 
 
-def _last_log_row() -> dict | None:
-    """The newest row (any source, any outcome, push rows included) - used
-    only for the idle-cadence fallback below."""
-    return ingest_account_quota.last_attempt(usage_db.open_account("claude", readonly=True))
+def take_peer_reading(host: str, fresh_within: int) -> str | None:
+    """HOST's freshest reading, stored here through the local gate when it
+    is younger than fresh_within seconds; returns the line to print, or None
+    (none fresh enough, or HOST not reached: then poll)."""
+    l_lines = (peer_gate(host, " --latest") or "").strip().splitlines()
+    if not l_lines:
+        return None
+    raw = l_lines[-1]  # the gate's one line, whatever a login script printed first
+    try:
+        d_row = json.loads(raw)
+        age = int(time.time()) - ingest_account_quota.columns("claude", d_row)["ts"]
+        if age >= fresh_within:
+            return None
+        ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_row, raw)
+    except (ValueError, KeyError, TypeError):
+        return None
+    return f"{host}'s reading is fresh ({age} s old): taken"
 
 
-def _last_claude_log_row() -> dict | None:
-    """The newest attempt from THIS poller specifically, reading or failure,
-    never one of statusline_payload_reader.py's frequent claude_statusline
-    rows: reading only the newest row of any source once missed a real
-    Retry-After backoff for a full tick (2026-08-30) - the poller polled
-    straight into a live 429 lockout it should have been sitting out."""
-    return ingest_account_quota.last_attempt(usage_db.open_account("claude", readonly=True), ("claude_api",))
+def _pct(d_window) -> str:
+    pct = d_window.get("utilization") if isinstance(d_window, dict) else None
+    return "?" if pct is None else f"{pct:.0f}"
 
 
-def _should_poll(now: float) -> bool:
-    last_claude_row = _last_claude_log_row()
-    if last_claude_row is not None:
-        d_err = last_claude_row.get("error") or {}
-        retry_after_s = d_err.get("retry_after_s")
-        if retry_after_s is not None:
-            backoff_until = last_claude_row["ts"] + retry_after_s
-            if now < backoff_until:
-                # Server-mandated backoff always wins, active session or not -
-                # see the note on the retry_after_s capture above.
-                return False
-    if is_fresh(HEARTBEAT_FILE, ACTIVE_WINDOW_SECONDS, now):
-        # Watched: every ACTIVE_INTERVAL_SECONDS, timed from this poller's own
-        # last row (push rows don't count, they cost no API call).
-        return last_claude_row is None or \
-            (now - last_claude_row["ts"]) >= ACTIVE_INTERVAL_SECONDS - TICK_SLACK_SECONDS
-    last_row = _last_log_row()
-    last_ts = last_row["ts"] if last_row else None
-    return last_ts is None or (now - last_ts) >= IDLE_INTERVAL_SECONDS
-
-
-def main() -> None:
-    now = time.time()
-    if not _should_poll(now):
-        print(f"skip: last reading is under {ACTIVE_INTERVAL_SECONDS}s old (watched) or {IDLE_INTERVAL_SECONDS}s old (idle)")
-        return
+def main(argv: list[str] | None = None) -> None:
+    import argparse
+    parser = argparse.ArgumentParser(description="One reading of the Claude account's quota (see the module docstring).")
+    parser.add_argument("--peer", metavar="HOST", help="first take HOST's fresh reading; hand HOST a new reading")
+    parser.add_argument("--fresh-within", type=int, default=0, metavar="SECONDS",
+                        help="with --peer: HOST's reading younger than this is taken instead of polling")
+    args = parser.parse_args(argv)
+    if args.peer:
+        taken = take_peer_reading(args.peer, args.fresh_within)
+        if taken:
+            print(taken)
+            sys.exit(10)
 
     token, d_error = fetch_token()
     d_api = d_api_headers = None
@@ -239,9 +232,20 @@ def main() -> None:
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
     }
+    raw = json.dumps(d_record)
     # The gate stores a reading in account_quotas (and refreshes
     # state/quota/claude when newer), a failed attempt in poll_errors.
-    ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_record)
+    ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_record, raw)
+    if d_error is None:
+        if args.peer and peer_gate(args.peer, stdin=raw + "\n") is None:
+            print(f"{args.peer} not reached: this reading stays here", file=sys.stderr, flush=True)
+        print(f"5h {_pct(d_api.get('five_hour'))}% · 7d {_pct(d_api.get('seven_day'))}%")
+        return
+    if d_error.get("status") == 429:
+        print(f"retry-after {d_error.get('retry_after_s') or 0}")
+        sys.exit(75)
+    print("failed: " + " ".join(str(d_error[k]) for k in ("stage", "type", "status") if d_error.get(k) is not None))
+    sys.exit(1)
 
 
 if __name__ == "__main__":

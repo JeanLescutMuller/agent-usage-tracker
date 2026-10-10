@@ -2,7 +2,7 @@
 # Tests for src/ingest_account_quota.py, the only writer of
 # account_quotas.db: what it stores, what it refuses, its idempotency, the
 # `latest` view, and the state/quota/claude file it keeps for
-# agent-statusline, auto-apply and smart-orchestrator.
+# agent-statusline, auto-apply and jobs/claude-quota.sh.
 set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 
