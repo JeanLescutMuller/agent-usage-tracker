@@ -39,6 +39,17 @@ data/
 
 **Reading: open the database normally and run `PRAGMA query_only = ON`, not a `mode=ro` URI.** macOS's system SQLite intermittently refuses a mode=ro open of these WAL databases ("unable to open database file") when no connection holds the `-shm` file at that instant, which is most of the time [verified 2026-10-08].
 
+**Reading only the new rows: by `rowid`, never by `ts` or `written_ts`.** A row is often written well after its `ts`, so a reader that remembers "the largest `ts` I have seen" silently skips it. Remember the largest `rowid` instead and read `WHERE rowid > ?`: every table is insert-only, so `rowid` only grows, in write order. Rows that arrive late today:
+
+| Rows | Written after their `ts` by | Since |
+|---|---|---|
+| `claude_statusline` readings | up to the session's idle time: `ts` is the session's last API response, written at its next render | 2026-09-30 |
+| Readings copied between the Mac and the VM (`--peer`) | minutes; they also keep the other machine's `written_ts` | 2026-10-10 |
+| `requests` | 15 min or more: a request is stored once its first line is 15 min old (§10) | 2026-10-08 |
+| Target design (`design/TARGET_SPEC.md`): every reading from the other machine, synced every 2 min | up to about 2 min | not built yet |
+
+Example: a reader polls at 10:00:00 and remembers `ts` 09:59:50. At 10:01 the sync brings the VM's reading of 09:59:30: `ts > 09:59:50` misses it forever, `rowid > 4812` finds it. agent-quota-maximizer's `release/aqm/s1_ingest.py` reads with `ts > ? OR written_ts > ?` and must switch (`design/TARGET_SPEC.md` P11).
+
 **The scope rule — percent is account-scope only.** The quota meter is one account-level number: when two sessions spend at once, there is no per-session percentage — not a hidden one, an undefined one. So:
 
 | Database | Carries | Never carries |
@@ -310,6 +321,7 @@ The Claude poller borrows each machine's Claude Code login, whose access token l
 | **2026-10-10** | **One name per machine.** The Mac had no fixed `HostName`, so its network-derived hostname drifted on 2026-10-08: `chan-lescut-macbook-pro-1` until 16:38 UTC, `Chan-Lescut-MacBook-Pro` (18 requests, 16:59 → 17:03), then `chan-lescut-macbook-pro`; the VM held two central folders for it. The Mac now has a fixed `HostName`, `usage_db.machine_name()` follows job-runner's rule, and `adhoc_quotas_analysis/merge_machine_names.py` relabelled 18,990 Claude + 2,871 Codex requests (Mac and VM) and merged `central/chan-lescut-macbook-pro-1/` into `central/chan-lescut-macbook-pro/` (every old row found after the merge; the old folder and a tar backup are under `central/_archive/`) | `requests.machine` has one value per machine; the Mac's whole history is in one central folder |
 | 2026-10-10 | A Claude poller's 429 makes only its own machine wait (job `WAIT`, no longer `WAIT … all`) | The endpoint counts 429s per login token, i.e. per machine (`USAGE_DATA_SOURCES.md` §3.5): the Mac no longer stops polling for up to an hour because the VM was refused |
 | **2026-10-10** | **Scheduling moves to job-runner** (separate project): one trigger and one entrypoint per job (`claude-quota`, `codex-quota`, `codex-plan-history`, `transcripts`, `push`); `run_pollers.py` and the pollers' own interval code go. The Claude poller's timing now reads the age of `state/quota/claude` (any source, any machine) instead of its own last poll, and a 429's Retry-After holds both machines. **Readings cross machines**: the Mac stores the VM's fresh reading in its own database instead of polling, and hands the VM each reading it polls (same `raw`, same `row_hash`), so each machine's `account_quotas` (and its `central/<machine>/` copy) can hold rows taken on the other. The Codex pollers no longer run on the VM | A Claude `claude_api` row is no longer proof that this machine called the API; fewer `claude_api` rows while status-line readings are fresh |
+| 2026-10-10 | Rule written down: read new rows by `rowid`, never by `ts` or `written_ts` (§1) | No change to the data; an incremental reader by `ts` or `written_ts` has always been able to miss rows written late |
 
 ---
 

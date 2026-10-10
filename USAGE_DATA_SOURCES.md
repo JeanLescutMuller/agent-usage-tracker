@@ -68,7 +68,7 @@ The headless `claude -p --output-format json` result object (§3.3) and hooks st
 ### 2.3 Two asymmetries that drive most design decisions
 
 1. **Quota percent is always account-wide.** No source attributes a meter movement to a session, a thread or a client. Attribution needs per-session token or spend data plus a time-interval argument.
-2. **Only account-wide sources see usage this machine did not generate.** On Codex that is a large blind spot (cloud tasks, IDE extension, ChatGPT app), visible only through the app-server's daily buckets and the backend's `plan_limit_history`. On Claude every percent step since 09-13 matched a local message **[verified]**.
+2. **Only account-wide sources see usage this machine did not generate.** On Codex that is a large blind spot (cloud tasks, IDE extension, ChatGPT app), visible only through the app-server's daily buckets and the backend's `plan_limit_history`. On Claude every percent step since 09-13 matched a local message **[verified]**, but the percent also counts usage no local file sees (claude.ai chats, the mobile and desktop apps, Cowork, cloud sessions): any correlation of the percent with local tokens or $ assumes that share is small; the 7-day `seven_day_breakdown` (§3.5) is the only signal of it.
 
 ---
 

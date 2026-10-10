@@ -1,15 +1,15 @@
 # TODO
 
-## Target design: decided with the user 2026-10-08 → 10-10, not built yet
+## Target design: validated with the user 2026-10-10, not built yet
 
-| # | Decision | What changes |
+The whole target (Claude only, four categories of data) is specified in `design/TARGET_SPEC.md`, validated by the user on 2026-10-10 (proposals P1–P12); `design/DESIGN_MAP.html` draws it, `design/OPEN_QUESTIONS.md` keeps the decisions and the remaining concerns.
+
+| # | Next | State |
 |---|---|---|
-| 1 | **Store only what Anthropic or OpenAI state; compute no $** | Drop `requests.usd` and `usage_db.PRICES` (one-time migration, Mac + VM); keep Claude Code's own $ (`telemetry.cost_usd`, `session_snapshots.session_cost_usd`); the maximizer gets tokens per 5-min slot × folder × interactive flag |
-| 2 | **Capture the transcripts' `cost-state` records** | New table `session_totals` in `sessions_usages.db`: tokens + $ per session × model, from Claude Code (they include the requests transcripts miss; transcripts are deleted after 365 days) |
-| 3 | **agent-statusline calls `src/statusline_payload_reader.py` directly**; the reader prints the account's freshest reading (the six fields of today's state file) | Drop `bin/ingest-claude-statusline.sh` and `state/quota/claude`; auto-apply's `runner/limits.py` reads the `latest` view (other repos: agent-statusline, auto-apply) |
-| 4 | **Reset rule, per window**: when the latest reading's `resets_ts` has passed (`observation < resets_ts <= now`), that window shows 0% | In the `latest` view and the reader's output; the database keeps only real observations (no predicted rows). Polling then only covers usage no statusline sees (headless runs, claude.ai, phone): idle cadence can slow to ~10 min |
-| 5 | **Every account reading shared both ways, Mac ↔ VM, every 60 s** (statusline readings included), each row tagged with the machine that observed it, only own rows sent | A poller polls only when the account has no reading younger than its threshold from any machine; the VM's threshold stays a minute longer than the Mac's, so they never poll together |
-| 6 | Parked: review the scheduled jobs (one trigger per job today; the user prefers fewer), and who runs the transcript reader on the VM (the maximizer's own job, eventually) | — |
+| 1 | Write the migration plan from `design/TARGET_SPEC.md` (its section 11 lists the data to move) | next |
+| 2 | Build it, in the plan's order | after 1 |
+| 3 | agent-quota-maximizer: read new rows by `rowid` (`release/aqm/s1_ingest.py`; `USAGE_DATA_REFERENCE.md` §1) | with 2 |
+| 4 | Parked: who runs the transcript reader on the VM (the maximizer's own job, eventually) | — |
 
 ## Usage per project and per kind of use (development / test runs / scheduled runs)
 
@@ -173,6 +173,10 @@ Accepted by the user on 2026-10-10 (`USAGE_DATA_REFERENCE.md` §5.8). Optional t
 ### Not obtainable from any source
 
 For the record, so nobody re-investigates: Codex spend at any granularity on a Plus account (403 or `null` everywhere); account-wide spend for either agent; quota percent per session or thread (Codex's `thread_usage/query_v2` returns `unavailable`); usage while the Mac is asleep or off (Codex's `plan_limit_history` recovers the last 7 days, Claude has no equivalent); a per-client breakdown for Claude (claude.ai web / mobile, other machines).
+
+## Someday: Codex in the four categories
+
+Parked by the user on 2026-10-10: the first target design is Claude only. Until this is picked up, Codex keeps running exactly as today (jobs `codex-quota` and `codex-plan-history`, the Codex part of `transcript_reader.py`), and the first target must not break it. What exists, the side effects of the first target on Codex (its rows stop reaching the VM once the `push` job goes), and a sketch of Codex in each category: `design/CODEX_DESIGN.md`. Un-park when the Claude target is built and running.
 
 ## Re-measure the Claude budgets on Max 5x
 
