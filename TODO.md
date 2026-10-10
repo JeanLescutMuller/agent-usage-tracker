@@ -15,7 +15,7 @@ The design (`design/TARGET_SPEC.md`) is built: phases 0–5 of `design/MIGRATION
 
 Requested 2026-10-07 by the user, from the `auto-apply` project. Prompt for the agent working here:
 
-**Status 2026-10-11:** built. The data: `slots` in `data/claude/aggregates.db` (`FOR_READERS.md`). The report: `python3 adhoc_quotas_analysis/usage_split.py --by project|kind|machine|model --span 7d|5h|day` (the $ and tokens of each window or day, per group). Left: auto-apply's Agent SDK sessions have no $, only tokens (item 5 above); the split by pipeline step (first words of a session's prompt, the user's draft `adhoc_quotas_analysis/usage_by_project_draft.py`) needs the transcripts and is not in `slots`. No $ is computed here: where `usd` is missing, the tokens are reported.
+**Status 2026-10-11:** built. The data: `slots` in `data/claude/aggregates.db` (`FOR_READERS.md`). The report: `python3 adhoc_quotas_analysis/usage_split.py --by project|kind|machine|model --span 7d|5h|day` (the $ and tokens of each window or day, per group). Left: auto-apply's Agent SDK sessions have no $, only tokens (item 5 above); the split by pipeline step (first words of a session's prompt, as in the example below) needs the transcripts and is not in `slots`. No $ is computed here: where `usd` is missing, the tokens are reported.
 
 ### Why
 
@@ -90,9 +90,7 @@ Inside test + scheduled runs, by the first words of the session's first prompt (
 sessions explicitly instead): judging jobs 51 × $0.035, apply in browser 4 × ~$0.20, drafting 5 × $0.074,
 Sapling detector in Chrome 1 × $0.29, fact-check review 4 × $0.045, visual check 2 × $0.035, Gmail check 9 × $0.007.
 
-Script used (single pass, ~50 lines; a starting point, not a spec):
-`adhoc_quotas_analysis/usage_by_project_draft.py` (groups by folder + `entrypoint` + first-prompt prefix + model;
-hard-coded to the two auto-apply folders).
+Computed with a one-off script (deleted 2026-10-11, never committed): it grouped the transcripts by folder + `entrypoint` + first-prompt prefix + model, for the two auto-apply folders only.
 
 ### Optional, later
 
