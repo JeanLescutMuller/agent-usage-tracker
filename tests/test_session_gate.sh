@@ -9,16 +9,16 @@ source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 SRC_DIR="$REPO_ROOT/src"
 RT="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-sgate.XXXXXX")"
 trap 'rm -rf "$RT"' EXIT
-SDB="$RT/data/claude/sessions_usages.db"
+AGENT=claude SDB="$RT/data/claude/sessions_usages.db"   # switched to Codex for requests and their views (Codex only since 2026-10-10)
 
-ingest() { AGENT_USAGE_TRACKER_RUNTIME="$RT" python3 "$SRC_DIR/ingest_session_usage.py" --agent claude "$@" 2>/dev/null; }
+ingest() { AGENT_USAGE_TRACKER_RUNTIME="$RT" python3 "$SRC_DIR/ingest_session_usage.py" --agent "$AGENT" "$@" 2>/dev/null; }
 q() {
     python3 -c 'import sqlite3, sys
 for r in sqlite3.connect(sys.argv[1]).execute(sys.argv[2]):
     print("\t".join("" if v is None else str(v) for v in r))' "$SDB" "$1"
 }
 py() { AGENT_USAGE_TRACKER_RUNTIME="$RT" python3 -c "import sys; sys.path.insert(0, '$SRC_DIR'); import usage_db, ingest_session_usage as g
-db = usage_db.open_sessions('claude')
+db = usage_db.open_sessions('$AGENT')
 $1"; }
 
 section "snapshots: stored per session, repeats skipped, never a percent"
@@ -31,7 +31,8 @@ assert_contains "a percent key anywhere -> rejected" \
     "$(ingest --session-id s1 <<< '{"ts":1,"source":"claude_statusline","prompt_cache":{"five_hour_pct":3}}')" '"rejected": 1'
 assert_contains "not a plain session id -> rejected" "$(ingest --session-id ../x <<< "$snap")" '"rejected": 1'
 
-section "requests: inserted once per request_id"
+section "requests: inserted once per request_id (Codex only since 2026-10-10)"
+AGENT=codex SDB="$RT/data/codex/sessions_usages.db"
 req() { printf "{'ts': %s, 'dt': 'x', 'request_id': '%s', 'machine': 'm', 'session_id': '%s', 'folder': '%s', 'entrypoint': '%s', 'model': 'claude-opus-5', 'input_tokens': 1, 'output_tokens': 2, 'cache_read_tokens': 3, 'cache_write_5m_tokens': 4, 'cache_write_1h_tokens': 5, 'usd': %s}" "$@"; }
 assert_eq "two new" "2" "$(py "print(g.add_requests(db, [$(req 1000 r1 s1 /dev/a cli 1.0), $(req 1010 r2 s1 /dev/a cli 2.0)]))")"
 assert_eq "the same ids again: none" "0" "$(py "print(g.add_requests(db, [$(req 1000 r1 s1 /dev/a cli 1.0)]))")"

@@ -119,6 +119,18 @@ CREATE TABLE telemetry (             -- Claude Code's own per-request events (OT
 CREATE INDEX telemetry_request ON telemetry(request_id);
 CREATE INDEX telemetry_session ON telemetry(session_id);
 CREATE INDEX telemetry_ts ON telemetry(ts);
+-- One telemetry event per request id: a batch Claude Code re-sends is
+-- stored again (its received_at differs), and must not count twice.
+CREATE VIEW telemetry_requests AS
+    SELECT * FROM telemetry
+    WHERE rowid IN (SELECT MIN(rowid) FROM telemetry
+                    WHERE event = 'api_request' AND request_id IS NOT NULL GROUP BY request_id);
+"""
+
+# Codex only (out of the first target, design/CODEX_DESIGN.md): its turns stay in
+# data/codex/sessions_usages.db, with the price-table USD. Claude's requests moved to
+# intermediary/ and its 5-min totals to aggregates.db (migration phases 2 and 5, 2026-10-10).
+CODEX_REQUESTS_SCHEMA = """
 CREATE TABLE requests (              -- one row per API request found in a transcript; rebuildable from them
     ts INTEGER NOT NULL,              -- the request's first transcript line
     dt TEXT NOT NULL,
@@ -144,12 +156,6 @@ CREATE TABLE scans (                 -- one row per transcript_reader.py run
     requests_added INTEGER NOT NULL
 );
 CREATE INDEX scans_ts ON scans(ts);
--- One telemetry event per request id: a batch Claude Code re-sends is
--- stored again (its received_at differs), and must not count twice.
-CREATE VIEW telemetry_requests AS
-    SELECT * FROM telemetry
-    WHERE rowid IN (SELECT MIN(rowid) FROM telemetry
-                    WHERE event = 'api_request' AND request_id IS NOT NULL GROUP BY request_id);
 -- Every request once: transcript requests, with Claude Code's own cost when
 -- telemetry has it, plus the requests only telemetry knows (prompt
 -- suggestions, compaction, web search, titles), placed in their session's
@@ -247,21 +253,16 @@ CREATE TABLE scans (                 -- one row per transcript_reader.py run
 );
 """
 
-# Claude list prices, $ per million tokens: (input, output, cache-read ratio
-# to input). Cache writes cost 1.25x input (5 min) and 2x input (1 h) for
-# every model. Each row reproduces Claude Code's own cost_usd and ccusage's
-# monthly totals exactly (USAGE_DATA_SOURCES.md §3.4, verified 2026-10-07).
+# Codex list prices, $ per million tokens: (input, output, cache-read ratio
+# to input), for data/codex/sessions_usages.db only (Codex is outside the
+# first target). Claude has none since 2026-10-10: no $ is computed by us,
+# only Claude Code's own (telemetry). No dollar figure exists upstream for a
+# Codex subscription; this is the price ccusage 20.0.26 applies, which
+# reproduces its monthly totals exactly (fitted 2026-10-08). Other Codex
+# models have no verified price: their usd stays NULL.
+# adhoc_quotas_analysis/CONCLUSIONS.md uses $5/$30 for gpt-5.6-sol instead;
+# see TODO.md.
 PRICES = {
-    "claude-opus-5": (5, 25, .1),
-    "claude-opus-5-5": (4, 20, .05),
-    "claude-sonnet-5": (2, 10, .1),
-    "claude-sonnet-5-5": (2, 10, .1),
-    "claude-haiku-4-5-20251001": (1, 5, .1),
-    # Codex: no dollar figure exists upstream for a subscription. This is the
-    # price ccusage 20.0.26 applies, which reproduces its monthly totals
-    # exactly (fitted 2026-10-08). Other Codex models have no verified price:
-    # their usd stays NULL. adhoc_quotas_analysis/CONCLUSIONS.md uses $5/$30
-    # for gpt-5.6-sol instead; see TODO.md.
     "gpt-5.6-sol": (4, 20, .1),
 }
 
@@ -325,7 +326,8 @@ def open_account(agent: str, readonly: bool = False):
 
 
 def open_sessions(agent: str, readonly: bool = False):
-    return connect(db_path(agent, "sessions_usages"), SESSIONS_SCHEMA, readonly)
+    schema = SESSIONS_SCHEMA + (CODEX_REQUESTS_SCHEMA if agent == "codex" else "")
+    return connect(db_path(agent, "sessions_usages"), schema, readonly)
 
 
 def open_aggregates(agent: str, readonly: bool = False):

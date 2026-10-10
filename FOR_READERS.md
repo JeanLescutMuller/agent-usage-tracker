@@ -1,8 +1,8 @@
 # For readers: how to read this project's data
 
-For any project or script that **reads** what agent-usage-tracker stores: a status line, auto-apply, an analysis, a future quota maximizer. What the data means, field by field, is in `USAGE_DATA_REFERENCE.md`; what exists upstream, in `USAGE_DATA_SOURCES.md`. This file only says how to read it safely, and what changes for readers while the target design (`design/TARGET_SPEC.md`, validated 2026-10-10) is being built (`design/MIGRATION_PLAN.md`).
+For any project or script that **reads** what agent-usage-tracker stores: a status line, auto-apply, an analysis, a future quota maximizer. What the data means, field by field, is in `USAGE_DATA_REFERENCE.md`; what exists upstream, in `USAGE_DATA_SOURCES.md`. This file only says how to read it safely, and what to read (the design: `design/TARGET_SPEC.md`, built on 2026-10-10).
 
-Last checked: 2026-10-10, against commit `9aed132`.
+Last checked: 2026-10-10, after migration phase 5.
 
 ## 1. Rules
 
@@ -23,9 +23,8 @@ Last checked: 2026-10-10, against commit `9aed132`.
 |---|---|---|
 | `claude_statusline` readings | up to the session's idle time: `ts` is the session's last API response, written at its next render | 2026-09-30 |
 | Readings copied between the Mac and the VM (`--peer`) | minutes; they also keep the other machine's `written_ts` | 2026-10-10, 14:10–21:19 UTC |
-| Transcript requests | 15 min or more: a request is stored once its first line is 15 min old | 2026-10-08 |
 | Every reading from the other machine (sync every 2 min) | up to about 2 min | 2026-10-10 (phase 1) |
-| Target: `slots` | 15 min or more after the slot ends; the Mac's slots reach the VM up to 5 min later, or hours later after the Mac slept | phases 2, 3 |
+| `slots` | 15 min or more after the slot ends; the Mac's slots reach the VM up to 5 min later, or hours later after the Mac slept | 2026-10-10 |
 
 Example: a reader runs at 10:00:00 and remembers `ts` 09:59:50. At 10:01 the sync brings the VM's reading of 09:59:30: `ts > 09:59:50` misses it forever; `rowid > 4812` finds it.
 
@@ -37,21 +36,21 @@ l_rows = db.execute("SELECT rowid, * FROM account_quotas WHERE rowid > ? ORDER B
 last_rowid = l_rows[-1][0] if l_rows else last_rowid   # keep it in your own state
 ```
 
-## 3. What to read, today and once built
+## 3. What to read
 
-All paths under `~/opt/agent-usage-tracker/`. Claude only; Codex stays as today (`USAGE_DATA_REFERENCE.md` §3).
+All paths under `~/opt/agent-usage-tracker/`. Claude only; Codex stays as it was (`USAGE_DATA_REFERENCE.md` §3, §10). Built on 2026-10-10 (`design/MIGRATION_PLAN.md`); the last column says what it replaced.
 
-| Question | Today (2026-10-10) | Target | Changes in |
-|---|---|---|---|
-| The account's quota now | view `latest` of `data/claude/account_quotas.db` (the reset rule applied: a passed window reads 0%, its reset NULL); the status line gets the same as six `\x1c`-separated fields printed by `src/statusline_payload_reader.py`. The file `state/quota/claude` is **gone since 2026-10-10** | — | done 2026-10-10 (phase 4) |
-| Quota history | table `account_quotas` of `data/claude/account_quotas.db`: **the same rows on both machines**, column `machine` = the machine that took the reading (NULL for the 72 readings `--peer` copied between the machines on 2026-10-10: their machine is unknown) | — | done 2026-10-10 (phase 1) |
-| Tokens and $ per 5-min slot, folder, interactive or not | table `slots` of `data/claude/aggregates.db`: 5-min slot × machine × folder × entrypoint × model; 6 token columns, `usd` (Claude Code's own), `tokens_without_usd` (the part `usd` does not cover). The view `usage_5m` of `sessions_usages.db` is **frozen since 2026-10-10 21:39 UTC** | — | done 2026-10-10 (phase 2) |
-| The same, every machine at once | on the VM: `data/claude/aggregates.db` (the VM's slots) + `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (the Mac's). The raw copies pushed until 2026-10-10 are in `central/_archive/<machine>-push-era/` | — | done 2026-10-10 (phase 3) |
-| Per request, per session | `requests`, `telemetry`, `session_snapshots` in `data/claude/sessions_usages.db` | `telemetry`, `session_snapshots` stay there (Category 2, on its own machine only); per-request transcript rows move to `intermediary/` (local working tables, deletable: **do not read**) | phases 2, 5 |
-| "Interactive or scheduled" | `entrypoint`: `cli` = interactive terminal, `sdk-cli` = `claude -p`, `sdk-py` = Agent SDK; classifying them is the reader's job | the same, a column of `slots` | — |
+| Question | Read | Replaces (gone) |
+|---|---|---|
+| The account's quota now | view `latest` of `data/claude/account_quotas.db`: the freshest reading, any source, any machine, the reset rule applied (a passed window reads 0%, its reset NULL). The status line gets the same as six `\x1c`-separated fields printed by `src/statusline_payload_reader.py` | the file `state/quota/claude` |
+| Quota history | table `account_quotas` of the same database: **the same rows on both machines**; `machine` = the machine that took the reading (NULL for the 72 readings copied between the machines on 2026-10-10 before the sync existed) | each machine's own readings only |
+| Tokens and $ per 5-min slot, folder, interactive or not | table `slots` of `data/claude/aggregates.db`: 5-min slot × machine × folder × entrypoint × model; 6 token columns, `usd` (Claude Code's own), `tokens_without_usd` (the part `usd` does not cover) | the views `usage_5m`, `usage_requests` of `sessions_usages.db` (their `usd` partly from a price table) |
+| The same, every machine at once | on the VM: `data/claude/aggregates.db` (the VM's slots) + `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (the Mac's); `UNION ALL` their `slots` | the raw copies the old push sent, now in `central/_archive/<machine>-push-era/` |
+| Per request, per session | `telemetry` (one row per API request event, Claude Code's own cost; count requests through the view `telemetry_requests`) and `session_snapshots` in `data/claude/sessions_usages.db`, each machine its own (Category 2, never shared). The per-request transcript rows are in `intermediary/`: local working tables, deletable, **not for readers** | Claude's `requests` table in `sessions_usages.db` |
+| "Interactive or scheduled" | `slots.entrypoint`: `cli` = interactive terminal, `sdk-cli` = `claude -p`, `sdk-py` = Agent SDK; classifying them is the reader's job | — |
 
 The four categories (`design/TARGET_SPEC.md`): **1** quotas, raw, shared by both machines; **2** each machine's raw rows, never shared; **3** `slots`, aggregates of 2, the Mac's sent to the VM; **4** anything computed from 1 + 3 belongs to the reader, not to this project.
 
 ## 4. When this file changes
 
-Each migration phase that changes a row of section 3 updates it, with its date. A reader built against "today" keeps working until the phase named in the last column.
+Any change to what a reader reads, or how, updates section 3 here with its date, and a row in `USAGE_DATA_REFERENCE.md` §6.

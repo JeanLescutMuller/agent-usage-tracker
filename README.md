@@ -36,7 +36,7 @@ codex_plan_history_poller.py ────────────┼▶ ingest_a
                                ┌─quota───┘
 statusline_payload_reader.py ──┤
                                └─session─┐
-telemetry_receiver.py ───────────────────┼▶ ingest_session_usage.py ─▶ sessions_usages.db (views usage_requests, usage_5m)
+telemetry_receiver.py ───────────────────┼▶ ingest_session_usage.py ─▶ sessions_usages.db (telemetry, snapshots)
 transcript_reader.py (every 5 min) ──────┘
 ```
 

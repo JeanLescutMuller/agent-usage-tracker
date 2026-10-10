@@ -1003,9 +1003,9 @@ throughout the §4 lockout despite never itself causing a new probe.
 what `agent-quota-tracker`/`agent-statusline` should actually do about
 all of it — which process captures what, when, and why — is kept as a
 **separate, short, pending-validation document**:
-[`PLAN.md`](./PLAN.md) (same directory as this file). Read this section
-first if you're picking this up cold; `PLAN.md` assumes you already have
-it.
+`PLAN.md` (same directory; no longer exists: its proposals were built,
+then superseded by `../design/TARGET_SPEC.md`, 2026-10-10). Read this
+section first if you're picking this up cold.
 
 ### Methodology notes, for whoever repeats any of this
 

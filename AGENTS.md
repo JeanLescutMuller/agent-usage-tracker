@@ -1,56 +1,50 @@
 # agent-usage-tracker development instructions
 
-These instructions govern development of this repository. What it does, its runtime layout and its contract with `agent-statusline` are in `README.md`; what data it captures is in `USAGE_DATA_REFERENCE.md`. This file only covers things relevant to *working on* the project. `CLAUDE.md` is a compatibility symlink to this file.
+For *working on* this repo; what it does: `README.md`. `CLAUDE.md` is a symlink to this file.
 
 ## Repo layout
 
 ```
 agent-usage-tracker/
-├── install.sh / uninstall.sh     # bare-machine installer and its inverse; no migration logic (see below)
-├── utils.sh                      # echo/color helpers for install.sh, uninstall.sh and tests
-├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream, in which unit, at which granularity, for both agents
-├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, when, and where it lands
-│                                 # Other projects link to these rather than restating them. Keep them tested and dated.
+├── install.sh / uninstall.sh     # bare-machine installer and its inverse (see below)
+├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream
+├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, where
+├── FOR_READERS.md                # how other projects read the data
+├── design/                       # TARGET_SPEC.md (the four categories), MIGRATION_PLAN.md, DESIGN_MAP.html, CODEX_DESIGN.md
 ├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
-│   ├── usage_db.py                              # database paths, schema (tables + views), connect(), verified price table
-│   ├── ingest_account_quota.py                  # GATE: only writer of data/<agent>/account_quotas.db
-│   ├── ingest_session_usage.py                  # GATE: only writer of data/<agent>/sessions_usages.db
-│   ├── statusline_payload_reader.py             # collector: statusline payload -> both gates
-│   ├── claude_quota_api_poller.py / codex_quota_api_poller.py / codex_plan_history_poller.py  # collectors: meter pollers
-│   ├── telemetry_receiver.py                    # collector: local OTLP receiver (KeepAlive LaunchAgent)
-│   ├── transcript_reader.py                     # Claude transcripts -> intermediary/ (each request once); Codex session files -> requests
-│   ├── aggregate_slots.py + ingest_aggregates.py  # the job `aggregates`: final 5-min slots -> data/claude/aggregates.db, and its GATE
-│   ├── push_to_central.py                       # the Mac's aggregates job: new slots -> the VM over ssh (reads only)
-│   ├── receive_from_machine.py                  # on the VM: the Mac's slots -> ingest_aggregates.py, into central/<machine>/
-│   ├── merge_claude_env.py + claude_telemetry_env.json  # run from the repo: owns the telemetry keys in ~/.claude/settings.json's `env`
-│   ├── launchd/                                 # LaunchAgent templates (macOS): job.plist.template (one per job, rendered) and the receiver's
-│   └── systemd/                                 # the same as systemd --user units (Linux: the VM): job.{service,timer} and the receiver's
-├── jobs/                         # the jobs' job-runner entrypoints (separate project ~/dev/job-runner), deployed to ~/opt/agent-usage-tracker/<job>.sh:
-│                                 # claude-quota, aggregates, codex-quota, codex-plan-history (Mac only); each decides when, runs one collector, records the check
-├── adhoc_quotas_analysis/        # research, run by hand, never deployed - see its own AGENTS.md (the deep-dive: investigation, findings, gotchas, naming history)
-├── tests/                        # hermetic bash test suite, see tests/README.md
-└── TODO.md                       # parked gaps
+│   ├── usage_db.py               # paths, schemas, connect(), Codex price table
+│   ├── ingest_account_quota.py   # GATE of account_quotas.db (Category 1); also the VM side of the 2-min sync
+│   ├── ingest_session_usage.py   # GATE of sessions_usages.db (Category 2)
+│   ├── ingest_aggregates.py      # GATE of aggregates.db (Category 3)
+│   ├── statusline_payload_reader.py  # run by agent-statusline: stores the payload's reading, prints `latest`
+│   ├── claude_quota_api_poller.py    # job claude-quota: the sync (Mac), then a poll if no reading is fresh
+│   ├── codex_*_poller.py, telemetry_receiver.py  # Codex pollers; the local OTLP receiver (a service)
+│   ├── transcript_reader.py + aggregate_slots.py # job aggregates: transcripts -> intermediary/ -> final 5-min slots
+│   ├── push_to_central.py / receive_from_machine.py  # the Mac's slots -> the VM's central/<machine>/
+│   ├── merge_claude_env.py       # run from the repo: telemetry keys in ~/.claude/settings.json
+│   └── launchd/, systemd/        # trigger templates (Mac, VM)
+├── jobs/                         # job-runner entrypoints: claude-quota, aggregates, codex-quota, codex-plan-history (Mac)
+├── adhoc_quotas_analysis/        # research and hand-run migrations, never deployed (its own AGENTS.md)
+└── tests/                        # hermetic bash suite (tests/README.md)
 ```
 
 ## Rules
 
-- **A repeated quota reading is kept, not dropped** (easy to get wrong: an agent claimed the opposite on 2026-10-10). A statusline reading is dated by `observed_at`, its session's last API response, not by the render. The account gate drops only a re-render (same session, same `observed_at`, same percents and resets); a new API response with unchanged percents is a new row. So the quota's age is the time since the last API response anywhere, and polling every 2 min with a statusline on screen (before 2026-10-10) was the old poller's design, not lost readings. Check `USAGE_DATA_REFERENCE.md` §2 ("Claude push") and `ingest_account_quota.add_row` before describing dedup or dating.
-- **Percent is account-scope only.** `sessions_usages.db` never carries a quota percent under any name; `account_quotas.db` never carries per-session cost or tokens. The sessions gate rejects a percent-like key anywhere in a row. `USAGE_DATA_REFERENCE.md` §1 states it for downstream readers. Nothing here estimates a per-session percent.
-- **Only the gates write.** `ingest_account_quota.py`, `ingest_session_usage.py` and `ingest_aggregates.py` are the only code that inserts into a database under `data/`; collectors build a row and hand it over. Exception: `transcript_reader.py` writes `intermediary/` itself (local working tables, never sent, deletable). Data-changing SQL anywhere else under `src/` or `bin/` fails `tests/test_repo_hygiene.sh`.
-- **Never rewrite history.** Every table is insert-only; `row_hash` (or `request_id`) makes re-inserting the same row a no-op. Rows keep their JSON verbatim in `raw`. A layout change uses a one-time, idempotent, hand-run migration in `adhoc_quotas_analysis/` that archives the originals (`migrate_to_sqlite.py` is the latest pattern).
-- **Keep the contract with agent-statusline small** (README.md's "Contract with agent-statusline"): `src/statusline_payload_reader.py` (its path is the contract) takes the raw payload and picks its own fields; it must always exit 0 and print only the six-field line. That line's format and the heartbeat path are shared with that repo, and auto-apply reads the `latest` view - changing either is a change in all of them. Nothing here sources or runs agent-statusline code (enforced by `tests/test_repo_hygiene.sh`).
-- **Concurrent writers** (every open Claude session's statusline, the pollers, the receiver, the transcript reader) are handled by SQLite: WAL mode and a busy timeout (`usage_db.connect`). Keep each write short.
-- **Readers open with `PRAGMA query_only = ON`, never a `mode=ro` URI**: macOS's system SQLite intermittently refuses a mode=ro open of a WAL database whose `-shm` file no connection holds at that instant.
-- **Every doc change to what is captured goes into `USAGE_DATA_REFERENCE.md`**, with a dated change-history row (§6) and its "Last verified" line updated.
+- **A repeated quota reading is kept, not dropped.** A statusline reading is dated by `observed_at` (its session's last API response); the account gate drops only a re-render (same session, `observed_at`, percents and resets). Check `USAGE_DATA_REFERENCE.md` §2 before describing dedup or dating.
+- **Percent is account-scope only**: never in `sessions_usages.db` or `aggregates.db` (the gates reject a percent-like key); no cost or tokens in `account_quotas.db`.
+- **Only the gates write** under `data/`. Exception: `transcript_reader.py` writes `intermediary/` (local, deletable). Other data-changing SQL fails `tests/test_repo_hygiene.sh`.
+- **Never rewrite history.** Insert-only; `row_hash` / `request_id` / the slot key make a re-insert a no-op. A layout change is a one-time, idempotent, hand-run migration step that archives first (`adhoc_quotas_analysis/migrate_to_target.py`).
+- **No $ computed for Claude**: only Claude Code's own (telemetry, snapshots).
+- **Keep the contract with agent-statusline small**: the reader's path, its six-field line and the heartbeat path are shared; auto-apply reads `latest`. Changing one is a change in every repo. Nothing here runs agent-statusline code.
+- **Readers open with `PRAGMA query_only = ON`**, never a `mode=ro` URI; new rows by `rowid` (`FOR_READERS.md`).
+- **Every change to what is captured** gets a dated row in `USAGE_DATA_REFERENCE.md` §6 and its "Last verified" line.
 
-## Install/uninstall
+## Install, deploy
 
-`install.sh` assumes a bare machine and carries no one-time migration logic. For a layout change: `uninstall.sh` (removes what `install.sh` deploys, preserves `data/`, flags anything else as an orphan), resolve orphans, `install.sh`. Don't add a migration guard to `install.sh` instead.
+`install.sh` assumes a bare machine, no migration logic. **Never use `uninstall.sh` for a layout change**: it stops the telemetry receiver (Claude Code drops what it can't deliver), removes the telemetry settings and deletes `state/` and `intermediary/`. Retire a job with `migrate_to_target.py remove-trigger JOB`.
 
-## Deployment
-
-MacBook (LaunchAgents) and the VM `H-Frank-1` (systemd `--user`); every scheduled collector is a job-runner job (one trigger each, `com.jeanlescut.agent-usage-tracker.<job>`, its statuses on job-runner's dashboard), the telemetry receiver a plain service. The VM is deployed by rsyncing this repo to `~/dev/agent-usage-tracker` there and running `install.sh`; never edit code on the VM. `~/opt/agent-usage-tracker/` holds the deployed code, its data and state, and the real plist / unit files; `~/Library/LaunchAgents/` and `~/.config/systemd/user/` hold symlinks only. `adhoc_quotas_analysis/` and `src/merge_claude_env.py` run from the `~/dev` checkout.
+Mac (LaunchAgents) and the VM `H-Frank-1` (systemd `--user`): every scheduled step is a job-runner job, `com.jeanlescut.agent-usage-tracker.<job>`. VM deploy: rsync this repo to `~/dev/agent-usage-tracker` there, run `install.sh`; never edit code on the VM.
 
 ## Tests
 
-`bash tests/run.sh` before committing a change to `bin/`, `src/`, `adhoc_quotas_analysis/*.py`, `install.sh` or `uninstall.sh`. Hermetic: temp `$HOME`, fixture transcripts, monkeypatched `urlopen`, `AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1`. Never touches the real `~/.claude`, `~/.codex`, Keychain or network. Deliberately untested: the real Keychain read and live API calls (`poll_claude.py`'s `fetch_token`, the pollers' real requests) - re-verify those live per `USAGE_DATA_REFERENCE.md` §8.
+`bash tests/run.sh` before committing a change to `src/`, `jobs/`, `adhoc_quotas_analysis/*.py`, `install.sh` or `uninstall.sh`. Hermetic. **Every python call in a test points at a temp runtime** (`AGENT_USAGE_TRACKER_RUNTIME` or `--runtime`): on 2026-10-10 one did not, and wrote into the real database. Untested: the real Keychain read and live API calls (re-verify per `USAGE_DATA_REFERENCE.md` §8).

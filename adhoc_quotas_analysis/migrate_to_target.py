@@ -73,6 +73,14 @@ Subcommands (more are added as the phases are built):
            (the old statusline entry point) and state/quota/claude (the
            old copy of the freshest reading), which nothing reads any more;
            state/quota/ too once empty. Idempotent.
+  drop-old-requests
+           (steps 5.1, 5.2, every machine) data/claude/sessions_usages.db
+           copied whole into data/_archive/ first, then its frozen
+           `requests`, `scans` and their views `usage_requests`, `usage_5m`
+           dropped (rebuilt in intermediary/ in phase 2, every request found
+           again); state/transcript_reader/offsets.json (the old Claude
+           offsets) removed. Codex's sessions database is untouched.
+           Idempotent.
 
 Usage:
   python3 adhoc_quotas_analysis/migrate_to_target.py STEP [options] [--runtime DIR]
@@ -91,7 +99,7 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm",
-                                    "remove-trigger", "check-intermediary", "archive-central", "view-latest", "remove-legacy"])
+                                    "remove-trigger", "check-intermediary", "archive-central", "view-latest", "remove-legacy", "drop-old-requests"])
 parser.add_argument("job", nargs="?", help="pause, remove-trigger: the job (e.g. claude-quota)")
 parser.add_argument("--runtime", type=Path, default=Path.home() / "opt" / "agent-usage-tracker")
 parser.add_argument("--peer", help="cat1-shared: the other machine (ssh alias)")
@@ -400,8 +408,33 @@ def remove_legacy() -> None:
     say(f"removed {l_gone or 'nothing (already gone)'}")
 
 
+def drop_old_requests() -> None:
+    path = args.runtime / "data" / "claude" / "sessions_usages.db"
+    db = open_rw(path)
+    l_old = [r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE name IN "
+                                      "('requests', 'scans', 'usage_requests', 'usage_5m') ORDER BY type DESC, name")]
+    if l_old:
+        copy_path = ARCHIVE / f"claude__sessions_usages.pre-drop-requests-{STAMP}.db"
+        copy = sqlite3.connect(copy_path)
+        db.backup(copy)
+        counts_copy = counts(copy)
+        copy.close()
+        say(f"copied to {copy_path.name}: {counts_copy}")
+        db.execute("BEGIN IMMEDIATE")
+        for name in l_old:
+            kind = db.execute("SELECT type FROM sqlite_master WHERE name = ?", (name,)).fetchone()[0]
+            db.execute(f"DROP {kind.upper()} {name}")
+        db.execute(f"PRAGMA user_version = {usage_db.SCHEMA_VERSION}")
+        db.execute("COMMIT")
+    offsets = args.runtime / "state" / "transcript_reader" / "offsets.json"
+    if offsets.exists():
+        offsets.unlink()
+        l_old.append(str(offsets.relative_to(args.runtime)))
+    say(f"dropped {l_old or 'nothing (already gone)'}; left: {counts(db)}")
+
+
 {"backup": backup, "pause": pause, "cat1-shared": cat1_shared, "sync-init": sync_init,
  "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm,
  "remove-trigger": remove_trigger, "check-intermediary": check_intermediary,
  "archive-central": archive_central, "view-latest": view_latest,
- "remove-legacy": remove_legacy}[args.step]()
+ "remove-legacy": remove_legacy, "drop-old-requests": drop_old_requests}[args.step]()

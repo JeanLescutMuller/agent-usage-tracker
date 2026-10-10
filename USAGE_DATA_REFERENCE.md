@@ -4,7 +4,7 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-10 (both machines hold the same Claude readings: VM filled from its central copy, 0 missing, first sync both ways; machine names merged: per-table counts, Mac vs VM copy, identical up to the rows written since the last push); 2026-10-08 (central store on the VM: first push, per-table counts identical; move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
+*Last verified: 2026-10-10 (migration to `design/TARGET_SPEC.md`, phases 0–5: the slots equal a separate count of every request, Mac 24,004 / VM 189; the VM's copy of the Mac's slots identical; both status lines and auto-apply read `latest`; both machines hold the same Claude readings: VM filled from its central copy, 0 missing, first sync both ways; machine names merged: per-table counts, Mac vs VM copy, identical up to the rows written since the last push); 2026-10-08 (central store on the VM: first push, per-table counts identical; move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
 
 ---
 
@@ -18,7 +18,7 @@ All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the cod
 data/
 ├── claude/
 │   ├── account_quotas.db      account scope: account_quotas (readings), poll_errors (failed poll attempts), view latest
-│   ├── sessions_usages.db     session scope: telemetry, session_snapshots (Claude's requests, scans, usage_requests, usage_5m: frozen since 2026-10-10 21:39 UTC)
+│   ├── sessions_usages.db     session scope: telemetry, session_snapshots (Codex's: its turns, requests + scans)
 │   └── aggregates.db          Category 3: slots (final 5-min slots), since 2026-10-10
 ├── codex/
 │   └── account_quotas.db      account scope (no Codex sessions database yet - see below)
@@ -276,7 +276,7 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 ### 5.7 Recent data, and retention
 
 - **Recent rows: filter on `ts`** (indexed in every table) instead of scanning. The latest Claude reading is `SELECT * FROM latest`.
-- **Per-folder usage: read `slots` in `data/claude/aggregates.db`** (since 2026-10-10). For Claude, `requests`, `scans`, `usage_requests` and `usage_5m` in `sessions_usages.db` stopped growing on 2026-10-10 at 21:39 UTC (dropped in migration phase 5); before that: only the views add the requests telemetry sees and transcripts never record (prompt suggestions, compaction, web search, titles: about 4.6% of USD), and prefer Claude Code's own cost to the price table. A slot is `final` once it ended before the last scan's `complete_through_ts`; until then, requests younger than 15 min are still missing.
+- **Per-folder usage: read `slots` in `data/claude/aggregates.db`** (§10). It already adds the requests telemetry sees and transcripts never record (prompt suggestions, summaries, web search, titles), keeps Claude Code's own cost only, and says what that cost does not cover (`tokens_without_usd`). The most recent slots appear 15 min after they end.
 - **Retention: none — rows are kept indefinitely.** Revisit if `data/claude/` passes ~1 GB (it was 178 MB after the migration).
 
 ### 5.8 No Claude reading at all while nobody uses Claude Code on a machine (accepted, 2026-10-10)
@@ -317,6 +317,7 @@ The Claude poller borrows each machine's Claude Code login, whose access token l
 | **2026-10-10** | **Category 3: `slots` in `data/claude/aggregates.db`** (migration phase 2): the job `aggregates` replaces `transcripts`; Claude requests are read into `intermediary/claude/` (local, no `usd`, no `machine`), then every final 5-min slot is written once, per machine × folder × entrypoint × model, with Claude Code's own `usd` where telemetry has it and `tokens_without_usd` for the rest. Rebuilt from every transcript: Mac 22,802 requests (every one of the 22,794 old rows found again, same tokens), 2,944 slots; VM 189, 41 | Claude's `requests`, `scans`, `usage_requests`, `usage_5m` in `sessions_usages.db` stop growing at 21:39 UTC: read `slots`. Before 2026-09-30 (no telemetry) `usd` is NULL |
 | **2026-10-10** | **Only Category 3 goes to the VM** (migration phase 3): the `push` job is gone; the Mac's `aggregates` job sends its new slots into `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (first send: 2,945 slots, the same totals on both sides); the old `central/<machine>/` copies moved whole to `central/_archive/<machine>-push-era/` | Codex rows and the Mac's raw Claude rows no longer reach the VM (accepted, `design/CODEX_DESIGN.md`) |
 | **2026-10-10** | **The latest reading is a view, not a file** (migration phase 4): `latest` applies the reset rule (a passed reset reads 0%); agent-statusline runs `src/statusline_payload_reader.py` directly, which prints it; auto-apply queries it; `bin/ingest-claude-statusline.sh` and `state/quota/claude` removed | No change to stored rows. A reader of the old file reads the view (`FOR_READERS.md`) |
+| **2026-10-10** | **Clean-up** (migration phase 5): Claude's frozen `requests`, `scans`, `usage_requests`, `usage_5m` dropped from `sessions_usages.db` (copied to `data/_archive/` first); `usage_db.PRICES` keeps only Codex's `gpt-5.6-sol` | Claude has no `$` computed by this repo any more: only Claude Code's own (`slots.usd`, `telemetry.cost_usd`, `session_snapshots`) |
 | **2026-10-10** | **Scheduling moves to job-runner** (separate project): one trigger and one entrypoint per job (`claude-quota`, `codex-quota`, `codex-plan-history`, `transcripts`, `push`); `run_pollers.py` and the pollers' own interval code go. The Claude poller's timing now reads the age of `state/quota/claude` (any source, any machine) instead of its own last poll, and a 429's Retry-After holds both machines. **Readings cross machines**: the Mac stores the VM's fresh reading in its own database instead of polling, and hands the VM each reading it polls (same `raw`, same `row_hash`), so each machine's `account_quotas` (and its `central/<machine>/` copy) can hold rows taken on the other. The Codex pollers no longer run on the VM | A Claude `claude_api` row is no longer proof that this machine called the API; fewer `claude_api` rows while status-line readings are fresh |
 | 2026-10-10 | Rule written down: read new rows by `rowid`, never by `ts` or `written_ts` (§1) | No change to the data; an incremental reader by `ts` or `written_ts` has always been able to miss rows written late |
 
@@ -354,7 +355,7 @@ When any of this changes, update this file and its "Last verified" line.
 
 ## 9. Telemetry rows: `telemetry` in `data/claude/sessions_usages.db`
 
-One row per Claude API request (and per API error / refusal / exhausted retry), from 2026-09-30, with typed columns (`ts` = event time, `event`, `session_id`, `request_id`, `model`, `query_source`, the four token counts, `cost_usd`, `received_ts`) and the JSON below in `raw`, tagged `source: "claude_otel"`. Events without a usable session id are kept with `session_id` NULL (until 2026-10-08: `data/_unattributed/claude-otel.jsonl`; there were none). A batch Claude Code re-sends is stored again (its `received_at` differs), so count requests through `usage_requests`, which takes one event per `request_id`. Written through the sessions gate by `src/telemetry_receiver.py`, a local receiver on `127.0.0.1:4318` run by the `com.jeanlescut.agent-usage-tracker.otel` LaunchAgent. Nothing polls: Claude Code sends the events itself, because `install.sh` adds these keys to the `env` object of `~/.claude/settings.json` (`src/claude_telemetry_env.json`; `uninstall.sh` removes them again):
+One row per Claude API request (and per API error / refusal / exhausted retry), from 2026-09-30, with typed columns (`ts` = event time, `event`, `session_id`, `request_id`, `model`, `query_source`, the four token counts, `cost_usd`, `received_ts`) and the JSON below in `raw`, tagged `source: "claude_otel"`. Events without a usable session id are kept with `session_id` NULL (until 2026-10-08: `data/_unattributed/claude-otel.jsonl`; there were none). A batch Claude Code re-sends is stored again (its `received_at` differs), so count requests through the view `telemetry_requests`, which keeps one event per `request_id` (as `slots` does). Written through the sessions gate by `src/telemetry_receiver.py`, a local receiver on `127.0.0.1:4318` run by the `com.jeanlescut.agent-usage-tracker.otel` LaunchAgent. Nothing polls: Claude Code sends the events itself, because `install.sh` adds these keys to the `env` object of `~/.claude/settings.json` (`src/claude_telemetry_env.json`; `uninstall.sh` removes them again):
 
 ```text
 CLAUDE_CODE_ENABLE_TELEMETRY=1            OTEL_LOGS_EXPORTER=otlp      OTEL_METRICS_EXPORTER=none
@@ -391,29 +392,26 @@ Attribution attributes include the account's `user.email`; the file stays local,
 
 ---
 
-## 10. Transcript requests: `requests` in `data/<agent>/sessions_usages.db`, and the views
+## 10. Category 3: `slots` in `data/claude/aggregates.db`, and the requests behind it
 
-One row per Claude API request found in a transcript (`~/.claude/projects/**/*.jsonl`, subagents included), from 2026-10-08, back to the oldest transcript kept. Written through the sessions gate by `src/transcript_reader.py`, every 5 minutes. No `raw`: the transcripts are the raw material, and the table can be rebuilt from them.
+One row per final 5-minute slot × machine × folder × entrypoint × model, since 2026-10-10, rebuilt then from every transcript (back to 2026-07-30). Written once, when final, by the job `aggregates` (`src/aggregate_slots.py` through the gate `src/ingest_aggregates.py`), never changed; the Mac's are also in the VM's `central/chan-lescut-macbook-pro/` (§11). How it is built: `design/TARGET_SPEC.md` §6.
 
 | Column | Meaning |
 |---|---|
-| `ts`, `dt` | The request's first transcript line |
-| `request_id` | `requestId` (else `message.id`); UNIQUE, so a resumed session's copied requests are skipped |
-| `machine` | The machine's name, `usage_db.machine_name()`: the rule "Machine name" in `~/AGENTS.md` (Mac: `HostName`; Linux: `/etc/hostname`) |
-| `session_id`, `folder`, `entrypoint` | `sessionId`, `cwd` (the execution folder), `entrypoint` (`cli` = interactive; `sdk-cli`, `sdk-py`, … = headless) |
-| `model` | `message.model` |
-| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | From the request's line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output; the first line undercounts output about 2×) |
-| `usd` | List price from `usage_db.PRICES`; NULL for a model not in the table |
+| `ts`, `dt` | Slot start, a multiple of 300 s; a request belongs to the slot of its first transcript line, a telemetry-only request to the slot of its event |
+| `machine` | Where the requests ran: `usage_db.machine_name()`, the rule "Machine name" in `~/AGENTS.md` |
+| `folder`, `entrypoint`, `model` | The session's `cwd`, `entrypoint` (`cli` = interactive terminal; `sdk-cli` = `claude -p`; `sdk-py` = Agent SDK; …), `message.model`; `''` when unknown |
+| `requests` | Requests counted once each |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | Sums over the transcript requests, each from its line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output) |
+| `cache_write_unknown_tokens` | Cache writes of the requests only telemetry has (prompt suggestions, summaries, web search, titles, compaction): telemetry gives no 5m / 1h split |
+| `usd` | Claude Code's own `cost_usd` (telemetry), summed over the requests that have one; NULL when none has (everything before 2026-09-30) |
+| `tokens_without_usd` | Every token of the requests with no `cost_usd`: the part `usd` does not cover |
 
-**Codex rows** (`data/codex/sessions_usages.db`, since 2026-10-08) use the same columns: one row per turn (`token_count` event), `request_id` = `<thread id>:<running total>` (a repeated event or an archived copy is skipped), `session_id` = the thread id, `folder` and `model` from `session_meta` / the latest `turn_context`, `entrypoint` = `session_meta.source` (`cli`, `vscode`, `exec`; `subagent` for a subagent thread), `input_tokens` without the cached part, `cache_read_tokens` = `cached_input_tokens`, `output_tokens` including reasoning. A turn is stored as soon as its event is written (no 15-min wait). `usd` is set only for `gpt-5.6-sol`. Note `interactive` in `usage_5m` is `entrypoint = 'cli'`, so Codex's VS Code threads count as not interactive.
+A slot is final once it ended before the last transcript scan's "complete through" time (run time − 15 min): a request is read once its first line is ≥ 15 min old (its lines span ≤ 292 s, measured 2026-10-08), and telemetry arrives within seconds (none later than 556 s in 8,090 events, measured 2026-10-10). The per-request rows live in `intermediary/claude/requests.db` (`requests`, `scans`): local working tables, never sent, deletable (the next run reads every transcript again); not for readers.
 
-A request is stored once it is complete: when its first line is ≥ 15 min old (its lines span ≤ 292 s, measured 2026-10-08). Each run adds a `scans` row; its `complete_through_ts` (run time − 15 min) means every request that started earlier is in the table.
+Until 2026-10-10 the Claude requests were a `requests` table in `sessions_usages.db`, with a `usd` from a price table, and the views `usage_requests` / `usage_5m`; frozen at 21:39 UTC, dropped at 22:08 (the copy in `data/_archive/claude__sessions_usages.pre-drop-requests-*.db`).
 
-| View | One row per | Use |
-|---|---|---|
-| `latest` (account database) | — | The freshest reading by `ts`, whatever wrote it |
-| `usage_requests` | API request, once | Transcript requests with `usd` from telemetry's `cost_usd` when present (`usd_from = 'telemetry'`), else the price table; plus the requests only telemetry has (`seen_in = 'telemetry'`), placed in their session's folder |
-| `usage_5m` | 5-minute slot × folder × `interactive` | `requests`, `usd` and token sums; `final` = the slot ended before the last scan's `complete_through_ts` |
+**Codex rows** (`data/codex/sessions_usages.db`, since 2026-10-08, unchanged: Codex is outside the first target, `design/CODEX_DESIGN.md`) are still a `requests` table with `scans` and the views `usage_requests` / `usage_5m`: one row per turn (`token_count` event), `request_id` = `<thread id>:<running total>` (a repeated event or an archived copy is skipped), `session_id` = the thread id, `folder` and `model` from `session_meta` / the latest `turn_context`, `entrypoint` = `session_meta.source` (`cli`, `vscode`, `exec`; `subagent` for a subagent thread), `input_tokens` without the cached part, `cache_read_tokens` = `cached_input_tokens`, `output_tokens` including reasoning, `machine`, and `usd` from `usage_db.PRICES` for `gpt-5.6-sol` only. A turn is stored as soon as its event is written.
 
 ---
 

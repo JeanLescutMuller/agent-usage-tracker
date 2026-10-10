@@ -84,7 +84,7 @@ for old_dir in l_old_dirs:
         agent, kind = old_db.parent.name, old_db.stem
         new_db = CENTRAL / args.to / "data" / agent / old_db.name
         new_db.parent.mkdir(parents=True, exist_ok=True)
-        schema = usage_db.ACCOUNT_SCHEMA if kind == "account_quotas" else usage_db.SESSIONS_SCHEMA
+        schema = usage_db.ACCOUNT_SCHEMA if kind == "account_quotas" else usage_db.SESSIONS_SCHEMA + usage_db.CODEX_REQUESTS_SCHEMA
         db = usage_db.connect(new_db, schema)
         db.execute("ATTACH DATABASE ? AS old", (str(old_db),))
         db.execute("BEGIN IMMEDIATE")
@@ -115,7 +115,7 @@ l_relabel = sorted(set(DATA.glob("*/sessions_usages.db")) | set(CENTRAL.glob("*/
 for path in l_relabel:
     if "_archive" in path.parts:
         continue
-    db = usage_db.connect(path, usage_db.SESSIONS_SCHEMA)
+    db = usage_db.connect(path, usage_db.SESSIONS_SCHEMA + usage_db.CODEX_REQUESTS_SCHEMA)
     with db:
         n = db.execute(f"UPDATE requests SET machine = ? WHERE machine IN ({ph})", [args.to, *args.l_from]).rowcount
     left = db.execute(f"SELECT count(*) FROM requests WHERE machine IN ({ph})", args.l_from).fetchone()[0]

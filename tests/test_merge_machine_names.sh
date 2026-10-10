@@ -23,7 +23,7 @@ _, machine, req, ts, pct = sys.argv
 db = usage_db.open_account("claude")
 a.add_row(db, "claude", {"ts": int(ts), "source": "claude_api", "api": {"five_hour": {"utilization": float(pct)}}})
 db.commit()
-db = usage_db.open_sessions("claude")
+db = usage_db.connect(usage_db.db_path("claude", "sessions_usages"), usage_db.SESSIONS_SCHEMA + usage_db.CODEX_REQUESTS_SCHEMA)   # the layout before 2026-10-10
 s.add_requests(db, [dict(ts=int(ts), dt="x", request_id=req, machine=machine, session_id="s1", folder="/d", entrypoint="cli",
                          model="m", input_tokens=1, output_tokens=1, cache_read_tokens=0, cache_write_5m_tokens=0,
                          cache_write_1h_tokens=0, usd=None)])

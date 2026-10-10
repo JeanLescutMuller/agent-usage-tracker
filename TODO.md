@@ -1,67 +1,23 @@
 # TODO
 
-## Target design: validated with the user 2026-10-10, not built yet
+## After the migration to the target design (built 2026-10-10)
 
-The whole target (Claude only, four categories of data) is specified in `design/TARGET_SPEC.md`, validated by the user on 2026-10-10 (proposals P1–P12); `design/DESIGN_MAP.html` draws it, `design/OPEN_QUESTIONS.md` keeps the decisions and the remaining concerns.
+The design (`design/TARGET_SPEC.md`) is built: phases 0–5 of `design/MIGRATION_PLAN.md`, each recorded there. Left open:
 
-| # | Next | State |
+| # | Item | Why |
 |---|---|---|
-| 1 | Run the migration, `design/MIGRATION_PLAN.md` (validated 2026-10-10): one phase per session, after the user's "go" | phases 0–4 done 2026-10-10; next: phase 5 (clean up) |
-| 2 | Build it, in the plan's order | after 1 |
-| 3 | Parked: who runs the transcript reader on the VM | — |
+| 1 | Check after a night with the Mac asleep that the VM polled then, and only then (`account_quotas` rows with `source = 'claude_api'` by `machine`) | so far the VM has not polled once while the Mac was awake, as designed; its polling while the Mac sleeps is not yet seen |
+| 2 | The VM's `~/AGENTS.md` (Oct 9) still describes `state/quota/claude`: refreshed by the next `bootstrap-home` run there | the template (`bootstrap-home` `17404ef`) and the Mac's copy are current |
+| 3 | `design/DESIGN_MAP.html`: its "target" is now the current design; turn it into `README.html` (+ `README.md` stub), dropping the "current" section | concern C14 |
+| 4 | `adhoc_quotas_analysis/AGENTS.md` is 9,835 words (docs checker limit 600): move the investigation history to `doc/` | concern C13; pre-existing |
+| 5 | auto-apply's Agent SDK sessions send no telemetry, so their slots carry `tokens_without_usd` only: give them the telemetry env keys (in auto-apply) | concern C7 |
+| 6 | Parked: who runs the transcript reader on the VM (a reader's own job, eventually) | — |
 
 ## Usage per project and per kind of use (development / test runs / scheduled runs)
 
 Requested 2026-10-07 by the user, from the `auto-apply` project. Prompt for the agent working here:
 
-### Decided with the user, 2026-10-07 → 10-08
-
-| Decision | Detail |
-|---|---|
-| Two parts, one repo | **Account quotas** (account-wide %, real time) and **session usages** (tokens + $ per request, session and execution folder). Classifying usage (organic, bot, test run…) is `agent-quota-maximizer`'s job; this repo only exposes facts (`folder`, `entrypoint`, `interactive` = `entrypoint == "cli"`) |
-| Two SQLite databases per machine and per agent | `data/<agent>/account_quotas.db` and `data/<agent>/sessions_usages.db`. One technology. Scope rule unchanged: no $ or tokens in the first, no percent in the second |
-| Every database has one gate, the only writer | `ingest_account_quota.py` and `ingest_session_usage.py` validate types and scope and skip redundant rows. Collectors never open a database. Enforced by a repo-hygiene test |
-| Insert-only everywhere | A request is stored once, when its transcript lines are ≥ 10 min old (a request's lines span ≤ 292 s, measured). Per-folder $ therefore lags 10–15 min; quota % stays real time |
-| Time fields | `ts` (Unix epoch) and `dt` (ISO UTC) are the first columns. In `account_quotas.db`, `ts` = when the reading was true (today's `observed_at`) |
-| No state file | `state/quota/claude` is dropped; the statusline reads the `latest` view with the `sqlite3` CLI (4 ms; a full render is 40 ms) and runs the ingest in the foreground (real time, about 28 ms, decided 2026-10-08) |
-| Central store on the VM, push only | Each machine pushes **new rows only** (row id > last pushed) over ssh every 5 min when online; on the VM the same gates insert them into `~/opt/agent-usage-tracker/central/<machine>/<agent>/`. The VM never pulls (the Mac sleeps, goes offline, sits behind NAT) |
-| No `account_usages` | No account-wide token or $ source exists for a Claude subscription (ccusage reads only local files; `USAGE_DATA_SOURCES.md` §3.5). Unseen usage is bounded by the meter's resolution, about 1 point per window |
-| Sources and prices proven | Transcript tokens and $ match telemetry and ccusage exactly (`USAGE_DATA_SOURCES.md` §3.4, `adhoc_quotas_analysis/verify_token_costs.py`) |
-| Speed | 200k rows (a year): 5-min batch insert 1.5 ms, last-24 h slot query 1.3 ms. `sqlite3` CLI insert from bash 5.5 ms; 8 concurrent writers: 0 failures |
-
-### Build plan (2026-10-08; Claude first, Mac first)
-
-```
-COLLECTORS (by source)                 GATES (only writers)         DATABASES (per machine, per agent)
-statusline_payload_reader.py ─quota──┐
-quota_api_poller.py ─────────────────┴▶ ingest_account_quota.py ─▶ account_quotas.db ─(view latest)─▶ statusline
-statusline_payload_reader.py ─session┐
-telemetry_receiver.py ───────────────┤
-transcript_reader.py (every 5 min) ──┴▶ ingest_session_usage.py ─▶ sessions_usages.db ─(view usage_5m)
-                                                                        │ new rows, every 5 min, ssh
-VM central/<machine>/<agent>/  ◀── same two gates ◀──────────────────────┘
-```
-
-| # | Step | Detail |
-|---|---|---|
-| 1 | Schemas + gates | `account_quotas(ts, dt, source, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, observed_by_session, raw)` + view `latest`. `sessions_usages.db`: `requests(ts, dt, request_id UNIQUE, machine, session_id, folder, entrypoint, model, query_source, in, out, cache_read, cache_write_5m, cache_write_1h, usd, usd_from)`, `telemetry(ts, dt, request_id, session_id, …, raw)`, `session_snapshots(ts, dt, session_id, model_id, session_cost_usd, prompt_cache)`, `files(path, ino, offset)`, `scans(ts, dt, complete_through_ts)`, view `usage_5m`. WAL, busy timeout. Both gates are importable and runnable from the command line |
-| 2 | Collectors | `statusline_payload_reader.py` (replaces `bin/ingest-claude-statusline.sh`), `quota_api_poller.py` (renames `poll_claude.py` / `poll_codex.py`), `telemetry_receiver.py` (renames `otlp_receiver.py`, now writes through the gate), `transcript_reader.py` (new, every 5 min, byte offset per file, requests ≥ 10 min old, $ from telemetry else the verified price table) |
-| 3 | One-time migration | `adhoc_quotas_analysis/migrate_to_sqlite.py`: JSONL → the two databases through the gates; originals to `data/_archive/`; idempotent; row counts reconcile; `quota_model.py` / `window_gaps.py` output unchanged |
-| 4 | agent-statusline | Runs the payload reader in the foreground, reads `latest` instead of `state/quota/claude`. Unchanged when the tracker is absent. Heartbeat stays (the poller uses it) |
-| 5 | Push to the VM | `push_to_central.py` after each `transcript_reader.py` run; VM install: `apt install sqlite3`, systemd `--user` units for the poller, receiver, transcript reader and the receiving gates |
-| 6 | Readers, docs, tests | `agent-quota-maximizer` reads the central databases; rewrite `USAGE_DATA_REFERENCE.md`, `README.md` (contract with agent-statusline), the rules in `AGENTS.md`, `tests/` |
-| 7 | Codex | Same layout under `data/codex/` |
-
-**Status 2026-10-08 (deployed on the Mac):**
-
-| # | Step | Status |
-|---|---|---|
-| 1–4 | Schemas + gates, collectors, migration, agent-statusline compatibility | ✅ done; see `USAGE_DATA_REFERENCE.md` §6 (2026-10-08 row) |
-| 5 | Push to the VM | ✅ 2026-10-08: tracker on the VM (systemd `--user`), every machine pushes to `central/<machine>/`; see `USAGE_DATA_REFERENCE.md` §11. Open: log Claude Code in on the VM so its own Claude poller works (credentials empty since 2026-08-27); the token also needs Claude Code to run there now and then to stay refreshed |
-| 6 | Readers, docs, tests | ✅ this repo and agent-quota-maximizer's `s1_ingest.py`; ⏳ the statusline, auto-apply and `jobs/claude-quota.sh` still read `state/quota/claude` (kept, written by the account gate) - switch them to the `latest` view, then drop the file |
-| 7 | Codex sessions | ✅ 2026-10-08: turns in `data/codex/sessions_usages.db`, identical to ccusage. **Open: which Codex price is the reference?** `usage_db.PRICES` uses ccusage's $4/$20 for `gpt-5.6-sol` (reproduces its totals; other Codex models stay NULL), `adhoc_quotas_analysis/CONCLUSIONS.md` uses $5/$30. Pick one before the maximizer converts Codex $ to % |
-
-`machine` = the machine's name by the rule "Machine name" in `~/AGENTS.md`, `usage_db.machine_name()` (decided 2026-10-08, rule aligned 2026-10-10 after the Mac's hostname drifted).
+**Status 2026-10-10:** the data this asks for is built: `slots` in `data/claude/aggregates.db` (per 5-min slot × machine × folder × entrypoint × model, every request once, Claude Code's own `usd` and `tokens_without_usd`; `FOR_READERS.md`). What remains is the report itself (the user's draft `adhoc_quotas_analysis/usage_by_project_draft.py`). No $ is computed here any more: where `usd` is missing, report tokens, not a list-price estimate. The decisions and build plan of 2026-10-07 → 10-08 are in git history and `USAGE_DATA_REFERENCE.md` §6.
 
 ### Why
 

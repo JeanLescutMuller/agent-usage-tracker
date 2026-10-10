@@ -1,6 +1,6 @@
 # Migration plan: from today's design to `design/TARGET_SPEC.md`
 
-Status: **validated by the user on 2026-10-10; not started.** The target is `design/TARGET_SPEC.md` (validated 2026-10-10, proposals P1–P12); its section 11 lists the data to move. This file says in which order, how each step is checked, and how each is undone. Claude only; Codex keeps running as today, except that its rows stop reaching the VM in phase 3 (accepted, `design/CODEX_DESIGN.md`).
+Status: **validated by the user on 2026-10-10; done the same day, phases 0–5** (each phase's record below). The target is `design/TARGET_SPEC.md` (validated 2026-10-10, proposals P1–P12); its section 11 lists the data to move. This file says in which order, how each step is checked, and how each is undone. Claude only; Codex keeps running as today, except that its rows stop reaching the VM in phase 3 (accepted, `design/CODEX_DESIGN.md`).
 
 ## Rules for every phase
 
@@ -119,6 +119,8 @@ Checks: the VM's `central/chan-lescut-macbook-pro/data/claude/aggregates.db` has
 Checks: on both machines every open session's status line shows the same % as `SELECT * FROM latest`; after a reset time passes with no new reading, 0% and no countdown; auto-apply's next run logs the quota it read; `grep -r state/quota/claude ~/dev` finds only history. Undo per step: previous commit of the repo concerned (4.2 and 4.3 work with the tracker before or after 4.4).
 
 ## Phase 5 · Clean up
+
+**Done 2026-10-10, 22:08 UTC**: Claude's `requests`, `scans`, `usage_requests`, `usage_5m` dropped on both machines (copied to `data/_archive/` first: Mac 22,794 requests, VM 189); `PRICES` keeps only Codex's entry; the docs rewritten (`AGENTS.md` 581 words, `FOR_READERS.md` without "today / target", reference §4 and §10); the Monitoring paragraph in bootstrap-home's template (`17404ef`) and the Mac's `~/AGENTS.md` (the VM's copy follows at its next bootstrap: `TODO.md` item 2); job-runner's part (5.5) was done in phases 2 and 3; `DESIGN_MAP.html` marked as built (its README.html: `TODO.md` item 3).
 
 | # | Step |
 |---|---|

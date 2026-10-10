@@ -141,7 +141,7 @@ S1=11111111-1111-1111-1111-111111111111
 python3 - <<PY
 import sys, time; sys.path.insert(0, "$REPO_ROOT/src")
 import usage_db, ingest_session_usage as s, aggregate_slots as a
-old, inter = usage_db.open_sessions("claude"), usage_db.open_intermediary("claude")
+old, inter = usage_db.connect(usage_db.db_path("claude", "sessions_usages"), usage_db.SESSIONS_SCHEMA + usage_db.CODEX_REQUESTS_SCHEMA), usage_db.open_intermediary("claude")   # the old layout
 for ts, rid, out in ((1000, "r1", 10), (1100, "r2", 20), (1400, "r3", 30)):
     s.add_requests(old, [dict(ts=ts, dt="x", request_id=rid, machine="m1", session_id="$S1", folder="/a", entrypoint="cli", model="m",
                               input_tokens=1, output_tokens=out, cache_read_tokens=100, cache_write_5m_tokens=0, cache_write_1h_tokens=0, usd=None)])
@@ -193,5 +193,25 @@ mkdir -p "$P4/bin" "$P4/state/quota" && touch "$P4/bin/ingest-claude-statusline.
 assert_contains "bin/ and the state file removed, then the empty folder" "$(python3 "$MIGRATE" remove-legacy --runtime "$P4")" "removed ['bin/', 'state/quota/claude', 'state/quota/']"
 assert_file_exists "the databases untouched" "$P4/data/claude/account_quotas.db"
 assert_contains "re-running: nothing" "$(python3 "$MIGRATE" remove-legacy --runtime "$P4")" "nothing (already gone)"
+
+section "phase 5: drop-old-requests"
+P5="$TMP/p5/opt/agent-usage-tracker"
+AGENT_USAGE_TRACKER_RUNTIME="$P5" python3 - <<PY
+import sys; sys.path.insert(0, "$REPO_ROOT/src")
+import usage_db, ingest_session_usage as s
+old = usage_db.connect(usage_db.db_path("claude", "sessions_usages"), usage_db.SESSIONS_SCHEMA + usage_db.CODEX_REQUESTS_SCHEMA)
+s.add_requests(old, [dict(ts=1, dt="x", request_id="r1", machine="m", session_id="s", folder="/a", entrypoint="cli", model="m",
+                          input_tokens=1, output_tokens=1, cache_read_tokens=0, cache_write_5m_tokens=0, cache_write_1h_tokens=0, usd=None)])
+s.add_telemetry(old, {"source": "claude_otel", "observed_at": 1, "received_at": 1, "event": "api_request", "attributes": {"request_id": "r1"}})
+codex = usage_db.open_sessions("codex")
+PY
+mkdir -p "$P5/state/transcript_reader" && printf '{}' > "$P5/state/transcript_reader/offsets.json" && printf '{}' > "$P5/state/transcript_reader/codex_offsets.json"
+out="$(python3 "$MIGRATE" drop-old-requests --runtime "$P5")"
+assert_contains "a copy first, with the rows" "$out" "requests 1"
+assert_contains "the four dropped, the old offsets too" "$out" "dropped ['usage_5m', 'usage_requests', 'requests', 'scans', 'state/transcript_reader/offsets.json']"
+assert_contains "telemetry and snapshots stay" "$out" "left: session_snapshots 0, telemetry 1"
+assert_file_exists "Codex's offsets stay" "$P5/state/transcript_reader/codex_offsets.json"
+assert_eq "Codex's database untouched" "requests" "$(qq "$P5/data/codex/sessions_usages.db" "SELECT name FROM sqlite_master WHERE name = 'requests'")"
+assert_contains "re-running: nothing" "$(python3 "$MIGRATE" drop-old-requests --runtime "$P5")" "dropped nothing (already gone)"
 
 harness_summary
