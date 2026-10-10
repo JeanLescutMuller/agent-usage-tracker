@@ -1,5 +1,16 @@
 # TODO
 
+## Target design: decided with the user 2026-10-08 → 10-10, not built yet
+
+| # | Decision | What changes |
+|---|---|---|
+| 1 | **Store only what Anthropic or OpenAI state; compute no $** | Drop `requests.usd` and `usage_db.PRICES` (one-time migration, Mac + VM); keep Claude Code's own $ (`telemetry.cost_usd`, `session_snapshots.session_cost_usd`); the maximizer gets tokens per 5-min slot × folder × interactive flag |
+| 2 | **Capture the transcripts' `cost-state` records** | New table `session_totals` in `sessions_usages.db`: tokens + $ per session × model, from Claude Code (they include the requests transcripts miss; transcripts are deleted after 365 days) |
+| 3 | **agent-statusline calls `src/statusline_payload_reader.py` directly**; the reader prints the account's freshest reading (the six fields of today's state file) | Drop `bin/ingest-claude-statusline.sh` and `state/quota/claude`; auto-apply's `runner/limits.py` reads the `latest` view (other repos: agent-statusline, auto-apply) |
+| 4 | **Reset rule, per window**: when the latest reading's `resets_ts` has passed (`observation < resets_ts <= now`), that window shows 0% | In the `latest` view and the reader's output; the database keeps only real observations (no predicted rows). Polling then only covers usage no statusline sees (headless runs, claude.ai, phone): idle cadence can slow to ~10 min |
+| 5 | **Every account reading shared both ways, Mac ↔ VM, every 60 s** (statusline readings included), each row tagged with the machine that observed it, only own rows sent | A poller polls only when the account has no reading younger than its threshold from any machine; the VM's threshold stays a minute longer than the Mac's, so they never poll together |
+| 6 | Parked: review the scheduled jobs (one trigger per job today; the user prefers fewer), and who runs the transcript reader on the VM (the maximizer's own job, eventually) | — |
+
 ## Usage per project and per kind of use (development / test runs / scheduled runs)
 
 Requested 2026-10-07 by the user, from the `auto-apply` project. Prompt for the agent working here:
@@ -155,9 +166,9 @@ Proposed fix, if history beyond a year matters: a small nightly job extracting o
 | Codex usage per day × model × client (CLI, IDE, web, …) | ChatGPT backend `usage/daily-token-usage-breakdown` (`USAGE_DATA_SOURCES.md` §4.4) | Low to medium: the only per-client split, but **relative** (peak day = 100); `dailyUsageBuckets` gives the scale | One more request in `poll_codex_plan_history.py` |
 | Claude quota status beyond the percent (`status` allowed / warning / rejected, `representative-claim`, overage) | `/v1/messages` response headers (`USAGE_DATA_SOURCES.md` §3.6) | Low: the percent already carries most of it | Needs a billed request of our own (≈ $0.0025) or a proxy |
 
-### Debian VM not covered
+### No Claude reading while every machine's token has expired
 
-Every collector (push path, pollers, telemetry receiver) is deployed on the MacBook only, as LaunchAgents. Claude Code or Codex usage on the VM shows only as account-wide percent movement — no telemetry, no push rows. Covering it needs systemd `--user` units for the pollers and receiver, and the telemetry env keys in the VM's `~/.claude/settings.json`. Only worth doing if agents actually run there.
+Accepted by the user on 2026-10-10 (`USAGE_DATA_REFERENCE.md` §5.8). Optional test, if it ever matters: once the VM's token has expired (401 in its `poll_errors`), run a Claude Code command that sends no message (`claude auth status`, `claude doctor`) and check whether `~/.claude/.credentials.json`'s `expiresAt` moved. If it did, a job running it every 6 h on the VM would keep the VM's poller alive without opening a 5-hour window.
 
 ### Not obtainable from any source
 

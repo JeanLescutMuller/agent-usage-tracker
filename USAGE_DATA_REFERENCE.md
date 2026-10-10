@@ -275,6 +275,12 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 - **Per-folder usage: read `usage_5m`** (or `usage_requests`), not `requests` alone: only the views add the requests telemetry sees and transcripts never record (prompt suggestions, compaction, web search, titles: about 4.6% of USD), and prefer Claude Code's own cost to the price table. A slot is `final` once it ended before the last scan's `complete_through_ts`; until then, requests younger than 15 min are still missing.
 - **Retention: none — rows are kept indefinitely.** Revisit if `data/claude/` passes ~1 GB (it was 178 MB after the migration).
 
+### 5.8 No Claude reading at all while nobody uses Claude Code on a machine (accepted, 2026-10-10)
+
+The Claude poller borrows each machine's Claude Code login, whose access token lasts 8 h and is renewed only by Claude Code itself (`USAGE_DATA_SOURCES.md` §3.5). If Claude Code runs on neither the Mac nor the VM for more than 8 h (several days away, say), both pollers get 401 and **no Claude reading is stored until Claude Code runs again on one of them**; after the refresh token expires too (weeks), only a new login helps. What this loses: usage made meanwhile elsewhere (claude.ai, the phone, cloud sessions) still shows up in the first reading afterwards, as a total, but *when* it happened is lost. Readers must treat such a stretch as "unknown", not as "unchanged". The maximizer's own Claude runs on the VM renew the VM's token as a side effect.
+
+**Decision (the user, 2026-10-10): accept the gap.** Rejected: a keepalive message every few hours, because any message opens a 5-hour window at an arbitrary time (`USAGE_DATA_SOURCES.md` §5.2). Not tried yet: whether a Claude Code command that sends no message (e.g. `claude auth status`) renews an expired token; if it does, a keepalive job without that drawback becomes possible (`TODO.md`).
+
 ## 6. Change history
 
 | Date | Change | Effect on the data |
