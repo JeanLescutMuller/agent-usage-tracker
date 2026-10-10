@@ -42,15 +42,18 @@ Check: tests green; `account_quotas` keeps growing on both machines after the de
 
 ## Phase 1 · Category 1: machine column, VM seeded, sync
 
+**Done 2026-10-10, 21:19 UTC**: 72 readings in both databases (`machine` NULL); VM: its 479 labelled, 177,327 Mac readings copied from the central copy, 0 missing; Mac: 177,333 labelled, then 1 more written in between; first sync at 21:19:25: the Mac received the VM's 479, the VM the Mac's readings above the seeded point. Still to watch over a day: the VM polls only while the Mac sleeps.
+
 | # | Where | Step |
 |---|---|---|
-| 1.1 | Mac | `migrate_to_target.py pause claude-quota`: unloads the Mac's `claude-quota` trigger, so `--peer` stops copying readings. The VM keeps polling at its own thresholds; statusline readings go on on both machines |
-| 1.2 | Mac → VM | `migrate_to_target.py cat1-shared`: compares `row_hash` between the two databases; writes the list of readings present in both (60 on 2026-10-10, more by then) to `data/_archive/cat1_shared.txt` |
-| 1.3 | Mac, VM | `migrate_to_target.py cat1-machine`: archive, `ALTER TABLE account_quotas ADD COLUMN machine`, fill: this machine's name, except the shared readings → NULL; `user_version = 2` |
-| 1.4 | VM | `migrate_to_target.py cat1-seed-vm`: every row of `central/chan-lescut-macbook-pro/data/claude/account_quotas.db` → `data/claude/account_quotas.db` (`INSERT OR IGNORE`, `machine` = the Mac, shared → NULL) |
-| 1.5 | Mac | write `state/sync/claude_quotas.json`: M = the push watermark of `claude/account_quotas` (every Mac row up to it is in the central copy, hence now in the VM's data), V = 0 (the VM's own rows, 538 today, all go to the Mac) |
-| 1.6 | code | P1 (`machine` in raw and column), P3 (`--sync-with`, `--sync-from`), P4 (`--if-older-than`, thresholds in `jobs/claude-quota.sh`); `--peer` and `--latest` removed. `state/quota/claude` is still written (its readers move in phase 4) |
-| 1.7 | VM, then Mac | deploy (`install.sh` reloads the Mac's `claude-quota` trigger: the pause ends) |
+| 1.1 | Mac | `migrate_to_target.py pause claude-quota`: unloads the Mac's `claude-quota` trigger, so `--peer` stops copying readings (and no sync can start before step 1.8). The VM keeps polling at its own thresholds; statusline readings go on on both machines |
+| 1.2 | Mac → VM | `migrate_to_target.py cat1-shared --peer H-Frank-1`: the readings present in both databases (60 on 2026-10-10, more by then) → `data/_archive/cat1_shared.txt`, copied to the VM |
+| 1.3 | Mac | `migrate_to_target.py sync-init`: `state/sync/claude_quotas.json` with sent = `seeded_through` = the push watermark of `claude/account_quotas` (every Mac reading up to it is in the VM's central copy), received = 0 (the VM's own readings, 538 today, all go to the Mac). **Before 1.4**: the push keeps running |
+| 1.4 | VM | `cat1-machine` (archive copy, `ALTER TABLE … ADD COLUMN machine`, fill: this machine's name, central folders by their name, shared readings NULL; `latest` with `machine`; `user_version = 2`), then `cat1-seed-vm` (every reading of `central/chan-lescut-macbook-pro/…` into `data/`, `machine` = the Mac, shared NULL; none missing) |
+| 1.5 | Mac | `cat1-machine` |
+| 1.6 | code | P1 (`machine` in raw and column; the statusline gets the name from `install.sh`, no `scutil` per render), P3 (`--sync-with`, `--sync-from`), P4 (`--if-older-than`, thresholds in `jobs/claude-quota.sh`); `--peer` and `--latest` removed. `state/quota/claude` is still written (its readers move in phase 4) |
+| 1.7 | VM | deploy, then `cat1-machine` again: labels the readings the old code wrote since 1.4, **before any sync** (the Mac's job is still paused) |
+| 1.8 | Mac | deploy (reloads `claude-quota`: the pause ends, the sync starts), then `cat1-machine` again: labels the readings the old code wrote since 1.5 and moves the sync's `sent` back below them if a sync already passed over them (`seeded_through`) |
 
 Checks:
 

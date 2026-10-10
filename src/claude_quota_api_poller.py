@@ -15,27 +15,30 @@ would just be storing a copy of data that already durably exists elsewhere
 on disk (cleanupPeriodDays=365 on this machine, so "durably" means about a
 year). Only log what can't be recomputed after the fact.
 
-When to poll is not decided here: the job-runner entrypoint claude-quota.sh
-(deployed to ~/opt/agent-usage-tracker/, run every 60s by its trigger) skips
-while state/quota/claude is fresh enough, and waits out a 429's Retry-After
-on this machine only - 429s are counted per login token, i.e. per machine
-(USAGE_DATA_SOURCES.md §3.5) - (this poller exits 75 with "retry-after N" as its last
-line). One start = one attempt, unless --peer finds a fresh reading first.
+When to poll is decided by its job-runner entrypoint claude-quota.sh
+(deployed to ~/opt/agent-usage-tracker/, run every 60 s by its trigger),
+which passes --if-older-than: this poller skips (exit 10) while the
+account's newest reading, any source, any machine, is younger than that
+(design/TARGET_SPEC.md §3.4). A 429 waits out its Retry-After on this
+machine only - 429s are counted per login token, i.e. per machine
+(USAGE_DATA_SOURCES.md §3.5) - (exit 75, "retry-after N" ending the last
+line). One start = at most one attempt.
 
-The MacBook runs it with --peer=H-Frank-1 (the VM cannot reach the Mac, so
-the Mac does both directions, over ssh, through the VM's own account gate,
-ingest_account_quota.py):
-  1. it first asks the VM for its freshest reading (`--latest`); younger than
-     --fresh-within seconds: stored here through the local gate, exit 10,
-     no API call;
-  2. else it polls, and hands a reading to the VM's gate, which stores it
-     and refreshes the VM's state/quota/claude - so the VM's own check then
-     finds it fresh and skips. A failed attempt stays here.
-The VM unreachable: the Mac goes on alone (a note on stderr).
+The MacBook also runs the 2-min sync of the quota readings with the VM
+(--sync-with=H-Frank-1 --sync-every=110; the VM cannot reach the Mac, so the
+Mac does both directions, design/TARGET_SPEC.md §3.3), before deciding: one
+ssh call runs the VM's gate (ingest_account_quota.py --sync-from), which
+stores the Mac's own new readings and answers with its own. Only a
+machine's own readings travel (`machine`); the two watermarks (the last
+rowid sent from here, the last asked from the VM) are in
+state/sync/claude_quotas.json and advance only once both sides stored
+everything. The VM unreachable: the sync waits for the next run and the
+summary says so; it becomes a failure (exit 1) once the last successful
+sync is older than SYNC_STALE_S.
 
-Exit codes: 0 a reading, its summary last ("5h 42% · 7d 18%"); 10 the
-peer's reading taken; 75 a 429; 1 any other failure (401, network...).
-Every attempt is stored, reading or failure, as before.
+Exit codes: 0 a reading, its summary last ("5h 42% · 7d 18%"); 10 fresh
+enough, no poll; 75 a 429; 1 any other failure (401, network..., or a
+sync failing for too long). Every attempt is stored, reading or failure.
 
 Note this poller's own `source: "claude_api"` rows are a fallback path now, not
 the primary one: statusline_payload_reader.py stores a free
@@ -63,10 +66,12 @@ KEYCHAIN_SERVICE = "Claude Code-credentials"
 # Where Claude Code keeps the same credential blob on Linux (no Keychain).
 CREDENTIALS_FILE = Path.home() / ".claude" / ".credentials.json"
 
-# The peer's account gate, run over ssh (a non-login shell: python3 is
+# The VM's account gate, run over ssh (a non-login shell: python3 is
 # /usr/bin/python3 on the VM, as for push_to_central.py).
-PEER_GATE = "python3 ~/opt/agent-usage-tracker/src/ingest_account_quota.py --agent claude"
-PEER_TIMEOUT_S = 20
+SYNC_COMMAND = "python3 ~/opt/agent-usage-tracker/src/ingest_account_quota.py --agent claude --sync-from={me} --after={after}"
+SYNC_STATE = usage_db.RUNTIME_DIR / "state" / "sync" / "claude_quotas.json"
+SYNC_TIMEOUT_S = 30
+SYNC_STALE_S = 1800  # a sync failing longer than this fails the job
 
 # Response headers worth keeping - request-id lets a specific reading be
 # cross-referenced/reported to Anthropic support if a number ever looks
@@ -174,35 +179,50 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
                             "detail": str(exc)}
 
 
-def peer_gate(host: str, args: str = "", stdin: str = "") -> str | None:
-    """Runs HOST's account gate over ssh; its stdout, or None when HOST
-    cannot be reached or the gate failed."""
+def sync(host: str, every: int, now: int) -> tuple[str, bool]:
+    """The 2-min sync with HOST, when due. Returns (what to say, stale):
+    stale = the last successful sync is older than SYNC_STALE_S."""
+    try:
+        d_state = json.loads(SYNC_STATE.read_text())
+    except (OSError, ValueError):
+        d_state = {"sent": 0, "received": 0, "last_ok_ts": 0}
+    if now - d_state["last_ok_ts"] < every:
+        return "", False
+    me = usage_db.machine_name()
+    db = usage_db.open_account("claude")
+    l_mine, sent = ingest_account_quota.own_rows_after(db, me, d_state["sent"])
+    payload = "".join(json.dumps({"raw": raw, "machine": me}, separators=(",", ":")) + "\n" for _, raw in l_mine)
     try:
         result = subprocess.run(
-            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host, PEER_GATE + args],
-            input=stdin, capture_output=True, text=True, timeout=PEER_TIMEOUT_S)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return result.stdout if result.returncode == 0 else None
+            ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", host,
+             SYNC_COMMAND.format(me=me, after=d_state["received"])],
+            input=payload, capture_output=True, text=True, timeout=SYNC_TIMEOUT_S)
+        if result.returncode != 0:
+            raise RuntimeError(f"exit {result.returncode}")
+        # JSON lines only: a login script may print a banner first.
+        l_lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
+        d_end = json.loads(l_lines[-1])
+        received = int(d_end["max_rowid"])
+    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError, KeyError, IndexError) as exc:
+        stale = now - d_state["last_ok_ts"] >= SYNC_STALE_S
+        print(f"sync with {host} failed ({type(exc).__name__}: {exc}); next run retries", file=sys.stderr, flush=True)
+        return f"{host} not reached", stale
+    d_got = ingest_account_quota.add_synced(db, "claude", [line for line in l_lines[:-1] if '"raw"' in line])
+    if d_end.get("rejected") or d_got["rejected"]:
+        print(f"sync: rejected {d_end.get('rejected')} there, {d_got['rejected']} here", file=sys.stderr, flush=True)
+    d_state |= {"sent": sent, "received": received, "last_ok_ts": now}   # other keys (seeded_through) kept
+    SYNC_STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = SYNC_STATE.with_name(f"{SYNC_STATE.name}.tmp")
+    tmp.write_text(json.dumps(d_state))
+    tmp.replace(SYNC_STATE)
+    return f"sync ↑{d_end.get('inserted', 0)} ↓{d_got['inserted']}", False
 
 
-def take_peer_reading(host: str, fresh_within: int) -> str | None:
-    """HOST's freshest reading, stored here through the local gate when it
-    is younger than fresh_within seconds; returns the line to print, or None
-    (none fresh enough, or HOST not reached: then poll)."""
-    l_lines = (peer_gate(host, " --latest") or "").strip().splitlines()
-    if not l_lines:
-        return None
-    raw = l_lines[-1]  # the gate's one line, whatever a login script printed first
-    try:
-        d_row = json.loads(raw)
-        age = int(time.time()) - ingest_account_quota.columns("claude", d_row)["ts"]
-        if age >= fresh_within:
-            return None
-        ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_row, raw)
-    except (ValueError, KeyError, TypeError):
-        return None
-    return f"{host}'s reading is fresh ({age} s old): taken"
+def newest_age(now: int) -> int | None:
+    """Seconds since the account's newest reading, any source, any machine."""
+    db = usage_db.open_account("claude", readonly=True)
+    ts = db and db.execute("SELECT ts FROM latest").fetchone()
+    return now - ts[0] if ts else None
 
 
 def _pct(d_window) -> str:
@@ -213,15 +233,18 @@ def _pct(d_window) -> str:
 def main(argv: list[str] | None = None) -> None:
     import argparse
     parser = argparse.ArgumentParser(description="One reading of the Claude account's quota (see the module docstring).")
-    parser.add_argument("--peer", metavar="HOST", help="first take HOST's fresh reading; hand HOST a new reading")
-    parser.add_argument("--fresh-within", type=int, default=0, metavar="SECONDS",
-                        help="with --peer: HOST's reading younger than this is taken instead of polling")
+    parser.add_argument("--sync-with", metavar="HOST", help="first the 2-min sync of the readings with HOST (the Mac only)")
+    parser.add_argument("--sync-every", type=int, default=110, metavar="SECONDS", help="with --sync-with: sync when the last one is this old")
+    parser.add_argument("--if-older-than", type=int, default=0, metavar="SECONDS",
+                        help="poll only if the account's newest reading is at least this old")
     args = parser.parse_args(argv)
-    if args.peer:
-        taken = take_peer_reading(args.peer, args.fresh_within)
-        if taken:
-            print(taken)
-            sys.exit(10)
+    now = int(time.time())
+    said, stale = sync(args.sync_with, args.sync_every, now) if args.sync_with else ("", False)
+    tail = f" · {said}" if said else ""
+    age = newest_age(now)
+    if age is not None and age < args.if_older_than:
+        print(f"quota fresh enough ({age} s){tail}")
+        sys.exit(1 if stale else 10)
 
     token, d_error = fetch_token()
     d_api = d_api_headers = None
@@ -232,6 +255,7 @@ def main(argv: list[str] | None = None) -> None:
         "ts": int(time.time()),
         "iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "source": "claude_api",  # "claude" before 2026-10-04 (renamed in place by rename_sources.py)
+        "machine": usage_db.machine_name(),  # since 2026-10-10: which machine's token took it
         "api": d_api,
         "api_headers": d_api_headers,
         "error": d_error,  # None on success; why the reading is missing otherwise
@@ -241,14 +265,12 @@ def main(argv: list[str] | None = None) -> None:
     # state/quota/claude when newer), a failed attempt in poll_errors.
     ingest_account_quota.add_row(usage_db.open_account("claude"), "claude", d_record, raw)
     if d_error is None:
-        if args.peer and peer_gate(args.peer, stdin=raw + "\n") is None:
-            print(f"{args.peer} not reached: this reading stays here", file=sys.stderr, flush=True)
-        print(f"5h {_pct(d_api.get('five_hour'))}% · 7d {_pct(d_api.get('seven_day'))}%")
-        return
+        print(f"5h {_pct(d_api.get('five_hour'))}% · 7d {_pct(d_api.get('seven_day'))}%{tail}")
+        sys.exit(1 if stale else 0)
     if d_error.get("status") == 429:
-        print(f"retry-after {d_error.get('retry_after_s') or 0}")
+        print(f"{said + ' · ' if said else ''}retry-after {d_error.get('retry_after_s') or 0}")
         sys.exit(75)
-    print("failed: " + " ".join(str(d_error[k]) for k in ("stage", "type", "status") if d_error.get(k) is not None))
+    print("failed: " + " ".join(str(d_error[k]) for k in ("stage", "type", "status") if d_error.get(k) is not None) + tail)
     sys.exit(1)
 
 

@@ -12,6 +12,7 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 
 INGEST="$REPO_ROOT/bin/ingest-claude-statusline.sh"
+export JR_MACHINE_NAME=t-mac   # this machine's name, as the deployed entry point passes it
 SEP=$'\034'
 TH_HOME="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-ingesthome.XXXXXX")"
 trap 'rm -rf "$TH_HOME"' EXIT
@@ -113,6 +114,7 @@ assert_contains "tagged claude_statusline" "$row" '"source":"claude_statusline"'
 assert_contains "carries the five-hour percent" "$row" '"five_hour_pct":42'
 assert_contains "carries the seven-day percent" "$row" '"seven_day_pct":55'
 assert_contains "carries the five-hour reset" "$row" '"five_hour_resets_at":"2026-01-01T15:00:00Z"'
+assert_contains "names the machine that took it" "$row" '"machine":"t-mac"'
 assert_contains "observed_at is the last assistant entry's timestamp" \
     "$row" '"observed_at":1767261605'
 assert_file_exists "state file written" "$STATE"

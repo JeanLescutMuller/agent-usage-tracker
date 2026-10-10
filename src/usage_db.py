@@ -33,7 +33,8 @@ RUNTIME_DIR = Path(os.environ.get("AGENT_USAGE_TRACKER_RUNTIME") or Path.home() 
 AGENTS = ("claude", "codex")
 
 # Bumped when a schema change needs a migration; 0 means "not created yet".
-SCHEMA_VERSION = 1
+# 2: account_quotas.machine and its place in `latest` (2026-10, adhoc_quotas_analysis/migrate_to_target.py cat1-machine).
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_MS = 10_000
 
 ACCOUNT_SCHEMA = """
@@ -48,7 +49,8 @@ CREATE TABLE account_quotas (
     observed_by_session TEXT,         -- push rows: the session that was rendering (who saw it, not whose usage)
     written_ts INTEGER NOT NULL,      -- when the row was written (the old JSONL `ts`)
     raw TEXT NOT NULL,                -- the row in its JSONL shape, verbatim
-    row_hash TEXT NOT NULL UNIQUE
+    row_hash TEXT NOT NULL UNIQUE,
+    machine TEXT                      -- the machine that took the reading (also in raw since 2026-10-10); NULL: unknown
 );
 CREATE INDEX account_quotas_ts ON account_quotas(ts);
 CREATE INDEX account_quotas_written ON account_quotas(written_ts);
@@ -66,9 +68,9 @@ CREATE TABLE poll_errors (
     row_hash TEXT NOT NULL UNIQUE
 );
 CREATE INDEX poll_errors_source_ts ON poll_errors(source, ts);
--- The freshest reading of the account, whatever wrote it.
+-- The freshest reading of the account, whatever wrote it, on any machine.
 CREATE VIEW latest AS
-    SELECT ts, dt, source, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts
+    SELECT ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts
     FROM account_quotas
     WHERE five_hour_pct IS NOT NULL OR seven_day_pct IS NOT NULL
     ORDER BY ts DESC, rowid DESC

@@ -24,13 +24,19 @@ Command line (migration, and later the VM push): one JSONL row per stdin
 line, inserted with the line itself as `raw`:
     ingest_account_quota.py --agent claude [--no-dedup] < rows.jsonl
 prints {"inserted": n, "duplicate": n, "redundant": n, "rejected": n}.
-    ingest_account_quota.py --agent claude --latest
-prints the freshest reading's raw row (the `latest` view's), or nothing.
-Both are what the MacBook's claude_quota_api_poller.py --peer runs on the VM.
+    ingest_account_quota.py --agent claude --sync-from=MACHINE --after=ROWID
+is the other side of the 2-min sync (design/TARGET_SPEC.md §3.3), run over
+ssh by MACHINE's claude_quota_api_poller.py --sync-with: stdin holds
+MACHINE's own new readings, one {"raw", "machine"} line each, stored here
+(no dedup: the sender already deduplicated); then it prints this machine's
+own readings with a rowid above ROWID, one {"rowid", "raw", "machine"} line
+each (at most SYNC_LIMIT), and last {"inserted", "duplicate", "rejected",
+"max_rowid"}: the rowid to ask from next time.
 """
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -46,6 +52,9 @@ SOURCES = {
 SESSION_KEYS = {"session_cost_usd", "prompt_cache", "session_id"}
 STATE_FILE = usage_db.RUNTIME_DIR / "state" / "quota" / "claude"
 FIELD_SEP = "\x1c"
+MACHINE_RE = re.compile(r"[A-Za-z0-9-]+")
+# Rows per direction per sync call: a backlog drains over successive runs.
+SYNC_LIMIT = 20_000
 
 
 def _epoch(value) -> int | None:
@@ -76,7 +85,8 @@ def columns(agent: str, d_row: dict) -> dict:
         raise ValueError(f"unknown {agent} source {source!r}")
     written_ts = int(d_row["ts"])
     d_col = dict(ts=written_ts, source=source, five_hour_pct=None, five_hour_resets_ts=None,
-                 seven_day_pct=None, seven_day_resets_ts=None, observed_by_session=None, written_ts=written_ts)
+                 seven_day_pct=None, seven_day_resets_ts=None, observed_by_session=None, written_ts=written_ts,
+                 machine=d_row.get("machine"))
     if source == "claude_statusline":
         # Dated by the transcript's last assistant entry, not by the write.
         d_col.update(ts=int(d_row.get("observed_at") or written_ts),
@@ -134,9 +144,12 @@ def write_state_if_newer(d_col: dict) -> bool:
     return True
 
 
-def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = True, update_state: bool = True) -> str:
+def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = True, update_state: bool = True,
+            machine: str | None = None) -> str:
     """Inserts one row; returns "inserted", "duplicate" or "redundant".
-    Raises ValueError for a row that must not be stored."""
+    Raises ValueError for a row that must not be stored. `machine`: the
+    machine that took the reading, when its raw does not say (rows from
+    before 2026-10-10, sent by the sync); otherwise raw's "machine"."""
     if not isinstance(d_row, dict) or not isinstance(d_row.get("ts"), (int, float)):
         raise ValueError("a row is a JSON object with a numeric ts")
     if SESSION_KEYS & set(d_row):
@@ -156,6 +169,9 @@ def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = T
              d_error.get("retry_after_s"), raw, h))
         return "inserted" if cur.rowcount else "duplicate"
     d_col = columns(agent, d_row)
+    d_col["machine"] = machine or d_col["machine"]
+    if d_col["machine"] is not None and not MACHINE_RE.fullmatch(str(d_col["machine"])):
+        raise ValueError(f"not a machine name: {d_col['machine']!r}")
     l_reading = [d_col[k] for k in ("ts", "five_hour_pct", "five_hour_resets_ts", "seven_day_pct", "seven_day_resets_ts")]
     # No transaction of its own: the caller's, if any, or autocommit. Two
     # renders of the same session racing between the SELECT and the INSERT
@@ -167,12 +183,15 @@ def add_row(db, agent: str, d_row: dict, raw: str | None = None, dedup: bool = T
             (d_col["observed_by_session"],)).fetchone()
         if last is not None and list(last) == l_reading:
             return "redundant"
-    cur = db.execute(
-        # Columns named, not positional: a column added later (machine, 2026-10) must not break this insert.
-        "INSERT OR IGNORE INTO account_quotas (ts, dt, source, five_hour_pct, five_hour_resets_ts, seven_day_pct, "
-        "seven_day_resets_ts, observed_by_session, written_ts, raw, row_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (d_col["ts"], usage_db.iso(d_col["ts"]), d_col["source"], d_col["five_hour_pct"], d_col["five_hour_resets_ts"],
-         d_col["seven_day_pct"], d_col["seven_day_resets_ts"], d_col["observed_by_session"], d_col["written_ts"], raw, h))
+    # Columns named, not positional, and `machine` only when known: a Codex
+    # database (no machine column until it is migrated) keeps working.
+    d_values = {"ts": d_col["ts"], "dt": usage_db.iso(d_col["ts"]), **{k: d_col[k] for k in (
+        "source", "five_hour_pct", "five_hour_resets_ts", "seven_day_pct", "seven_day_resets_ts",
+        "observed_by_session", "written_ts")}, "raw": raw, "row_hash": h}
+    if d_col["machine"] is not None:
+        d_values["machine"] = d_col["machine"]
+    cur = db.execute(f"INSERT OR IGNORE INTO account_quotas ({', '.join(d_values)}) VALUES ({','.join('?' * len(d_values))})",
+                     list(d_values.values()))
     if not cur.rowcount:
         return "duplicate"
     if update_state and agent == "claude" and (d_col["five_hour_pct"] is not None or d_col["seven_day_pct"] is not None):
@@ -198,13 +217,42 @@ def last_attempt(db, sources: tuple[str, ...] | None = None) -> dict | None:
     return None if reading is None else {"ts": reading, "error": None}
 
 
-def latest_raw(db) -> str | None:
-    """The raw row of the freshest reading, any source: the `latest` view's row."""
-    if db is None:
-        return None
-    row = db.execute("SELECT raw FROM account_quotas WHERE five_hour_pct IS NOT NULL OR seven_day_pct IS NOT NULL "
-                     "ORDER BY ts DESC, rowid DESC LIMIT 1").fetchone()
-    return row[0] if row else None
+def own_rows_after(db, machine: str, after: int) -> tuple[list, int]:
+    """This machine's own readings with a rowid above `after`: [(rowid, raw)]
+    (at most SYNC_LIMIT), and the rowid to ask from next time. One read
+    transaction, so the rows and that rowid come from the same snapshot:
+    every reading of `machine` up to it is in the list; a row written
+    meanwhile gets a larger rowid and is sent next time."""
+    db.execute("BEGIN")
+    try:
+        l_rows = db.execute("SELECT rowid, raw FROM account_quotas WHERE rowid > ? AND machine = ? ORDER BY rowid LIMIT ?",
+                            (after, machine, SYNC_LIMIT)).fetchall()
+        last = l_rows[-1][0] if len(l_rows) == SYNC_LIMIT else \
+            max(after, db.execute("SELECT COALESCE(MAX(rowid), 0) FROM account_quotas").fetchone()[0])
+    finally:
+        db.execute("COMMIT")
+    return l_rows, last
+
+
+def add_synced(db, agent: str, l_lines: list[str]) -> dict:
+    """Stores the {"raw", "machine"} lines another machine sent (sync), in
+    one transaction; returns the counts. A row already here is a duplicate."""
+    d_counts = {"inserted": 0, "duplicate": 0, "rejected": 0}
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        for line in l_lines:
+            try:
+                d_line = json.loads(line)
+                result = add_row(db, agent, json.loads(d_line["raw"]), d_line["raw"], dedup=False, machine=d_line.get("machine"))
+                d_counts["inserted" if result == "inserted" else "duplicate"] += 1
+            except (ValueError, KeyError, TypeError) as exc:
+                d_counts["rejected"] += 1
+                print(f"synced row rejected: {type(exc).__name__}: {exc}", file=sys.stderr)
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    return d_counts
 
 
 def main() -> None:
@@ -213,10 +261,17 @@ def main() -> None:
     parser.add_argument("--agent", required=True, choices=usage_db.AGENTS)
     parser.add_argument("--no-dedup", action="store_true", help="keep repeated statusline readings (history as is)")
     parser.add_argument("--no-state", action="store_true", help="do not touch state/quota/claude")
-    parser.add_argument("--latest", action="store_true", help="print the freshest reading's raw row, store nothing")
+    parser.add_argument("--sync-from", metavar="MACHINE", help="the other side of MACHINE's sync (see the docstring)")
+    parser.add_argument("--after", type=int, default=0, metavar="ROWID", help="with --sync-from: send own rows above it")
     args = parser.parse_args()
-    if args.latest:
-        print(latest_raw(usage_db.open_account(args.agent, readonly=True)) or "")
+    if args.sync_from:
+        db = usage_db.open_account(args.agent)
+        me = usage_db.machine_name()
+        d_counts = add_synced(db, args.agent, [line for line in sys.stdin if line.strip()])
+        l_rows, last = own_rows_after(db, me, args.after)
+        for rowid, raw in l_rows:
+            print(json.dumps({"rowid": rowid, "raw": raw, "machine": me}, separators=(",", ":")))
+        print(json.dumps(d_counts | {"max_rowid": last}))
         return
     db = usage_db.open_account(args.agent)
     d_counts = {"inserted": 0, "duplicate": 0, "redundant": 0, "rejected": 0}

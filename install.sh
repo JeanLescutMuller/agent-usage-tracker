@@ -38,6 +38,10 @@ source "$SCRIPT_DIR/utils.sh"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
+# This machine's name, by usage_db.machine_name() (the rule in ~/AGENTS.md): written into the
+# statusline's entry point, so a render needs no scutil call.
+MACHINE="$("$PYTHON3" -c "import sys; sys.path.insert(0, '$SCRIPT_DIR/src'); import usage_db; print(usage_db.machine_name())")" \
+    || { echo "no machine name: macOS sudo scutil --set HostName <name>; Linux sudo hostnamectl set-hostname <name>" >&2; exit 1; }
 
 RUNTIME="$HOME/opt/agent-usage-tracker"
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
@@ -65,7 +69,7 @@ _deploy() {
 # A template with its placeholders filled: this machine's interpreter, the
 # runtime tree, and for a job's trigger $JOB and $INTERVAL (seconds).
 _render() {
-    sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" \
+    sed -e "s#__PYTHON3__#$PYTHON3#g" -e "s#__RUNTIME__#$RUNTIME#g" -e "s#__MACHINE_NAME__#$MACHINE#g" \
         -e "s#__JOB__#${JOB:-}#g" -e "s#__INTERVAL__#${INTERVAL:-}#g" "$1"
 }
 

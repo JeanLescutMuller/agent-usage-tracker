@@ -19,6 +19,10 @@ set -uo pipefail
 # statusline's PATH is not always the user's login PATH.
 python="__PYTHON3__"
 case "$python" in __*) python=python3 ;; esac
+# This machine's name, written by install.sh too: usage_db.machine_name()
+# honours JR_MACHINE_NAME first, which spares a scutil call (~13 ms) per render.
+machine="__MACHINE_NAME__"
+case "$machine" in __*) machine= ;; esac
 # ${BASH_SOURCE[0]%/*} rather than $(cd ... && pwd): no subshell on every render.
-"$python" -S "${BASH_SOURCE[0]%/*}/../src/statusline_payload_reader.py" >/dev/null 2>&1
+JR_MACHINE_NAME="${JR_MACHINE_NAME:-$machine}" "$python" -S "${BASH_SOURCE[0]%/*}/../src/statusline_payload_reader.py" >/dev/null 2>&1
 exit 0

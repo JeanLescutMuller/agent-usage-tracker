@@ -89,15 +89,23 @@ printf '%s\n%s\n%s\n' "$row" "$api" "$err" | ingest claude >/dev/null
 assert_eq "re-sending stored rows adds nothing" "$before" "$(q "$ADB" "SELECT COUNT(*) FROM account_quotas")"
 assert_eq "...nor failed attempts" "1" "$(q "$ADB" "SELECT COUNT(*) FROM poll_errors")"
 
-section "a column added later does not break the gates (phase 1 adds machine)"
+section "machine: from raw, or given; checked; in the latest view"
+mrow='{"ts":8000,"iso":"x","source":"claude_api","machine":"m-1","api":{"five_hour":{"utilization":9.0}},"api_headers":{},"error":null}'
+ingest claude <<< "$mrow" >/dev/null
+assert_eq "taken from raw" "m-1" "$(q "$ADB" "SELECT machine FROM account_quotas WHERE ts = 8000")"
+assert_eq "the latest view names it" "m-1	9.0" "$(q "$ADB" "SELECT machine, five_hour_pct FROM latest")"
+assert_contains "a bad name is rejected" "$(ingest claude <<< '{"ts":8001,"iso":"x","source":"claude_api","machine":"a b","api":{},"error":null}')" '"rejected": 1'
+assert_eq "a row without one: NULL" "" "$(q "$ADB" "SELECT machine FROM account_quotas WHERE ts = 3000")"
+
+section "a column added later does not break the gates"
 python3 -c 'import sqlite3, sys
 db = sqlite3.connect(sys.argv[1])
-db.execute("ALTER TABLE account_quotas ADD COLUMN machine TEXT")
-db.execute("ALTER TABLE poll_errors ADD COLUMN machine TEXT")
+db.execute("ALTER TABLE account_quotas ADD COLUMN later TEXT")
+db.execute("ALTER TABLE poll_errors ADD COLUMN later TEXT")
 db.commit()' "$ADB"
 later_api='{"ts":7000,"iso":"x","source":"claude_api","api":{"five_hour":{"utilization":8.0,"resets_at":null},"seven_day":{"utilization":4.0,"resets_at":null}},"api_headers":{},"error":null}'
 later_err='{"ts":7100,"iso":"x","source":"claude_api","api":null,"api_headers":null,"error":{"stage":"network","type":"URLError"}}'
 assert_contains "a reading and a failed attempt still stored" "$(printf '%s\n%s\n' "$later_api" "$later_err" | ingest claude)" '"inserted": 2'
-assert_eq "...the new column left empty" "8.0	" "$(q "$ADB" "SELECT five_hour_pct, machine FROM account_quotas WHERE ts = 7000")"
+assert_eq "...the new column left empty" "8.0	" "$(q "$ADB" "SELECT five_hour_pct, later FROM account_quotas WHERE ts = 7000")"
 
 harness_summary

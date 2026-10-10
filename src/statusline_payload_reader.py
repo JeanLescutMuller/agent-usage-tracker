@@ -86,6 +86,13 @@ def main() -> None:
         return
     now = int(time.time())
     d_common = {"ts": now, "iso": usage_db.iso(now), "source": "claude_statusline", "observed_at": when}
+    # The machine that took the reading (since 2026-10-10). The entry point
+    # passes JR_MACHINE_NAME, written by install.sh, so no scutil call costs
+    # ~13 ms on every render; without a name, the reading is still kept.
+    try:
+        machine = usage_db.machine_name()
+    except (OSError, RuntimeError):
+        machine = None
     d_five, d_week = d_limits.get("five_hour") or {}, d_limits.get("seven_day") or {}
     # Percents unrounded, as Claude Code sends them; resets as text, as before.
     d_account = d_common | {
@@ -94,6 +101,7 @@ def main() -> None:
         "five_hour_resets_at": text(d_five.get("resets_at")),
         "seven_day_resets_at": text(d_week.get("resets_at")),
         "observed_by_session": text(d_payload.get("session_id")),
+        "machine": machine,
     }
     db = usage_db.open_account("claude")
     ingest_account_quota.add_row(db, "claude", d_account, json.dumps(d_account, separators=(",", ":")))

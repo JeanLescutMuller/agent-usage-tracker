@@ -31,6 +31,8 @@ for f in usage_db.py ingest_account_quota.py ingest_session_usage.py statusline_
 done
 assert_not_contains "the ingest wrapper runs this machine's python, not a bare name" \
     "$(cat "$RT/bin/ingest-claude-statusline.sh")" '__PYTHON3__"'
+assert_not_contains "...and passes this machine's name (no scutil call per render)" \
+    "$(cat "$RT/bin/ingest-claude-statusline.sh")" 'machine="__MACHINE_NAME__"'
 assert_file_missing "no database before the first write" "$RT/data/claude/account_quotas.db"
 assert_file_exists "data/claude/ created" "$RT/data/claude"
 assert_file_exists "data/codex/ created" "$RT/data/codex"
