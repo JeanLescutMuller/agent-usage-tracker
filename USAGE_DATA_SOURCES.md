@@ -20,17 +20,18 @@ Markers: **[tested]** was exercised live on this machine; **[verified]** was mea
 
 - **Percent is the only authoritative unit.** It is what actually runs out, and the only number a limit is enforced against. Anything that must not overshoot should be measured in percent.
 - **No server returns a dollar amount for usage; every USD figure is tokens × list price.** Claude Code multiplies tokens by its built-in list prices (`costBasis: "list"` **[tested]**) and reports the result in the statusline `cost`, the transcript `cost-state`, telemetry `cost_usd` and the `-p` JSON. ccusage and this repo recompute the same product and agree to the cent (§3.4). Codex reports no dollars at all (§4.5): a Codex USD figure is tokens × a price someone chose, with nothing upstream to check it against. Dollars are a *comparison* metric (was this model worth it?), never a budget; on a subscription the only real money is the plan fee.
-- **Tokens convert to percent by an unknown, variable factor.** The meter weights cache reads far below list price (roughly 4–5×, `CONCLUSIONS.md`), and the dollars-per-percent ratio varies about ±30% between windows.
+- **Tokens convert to percent by an unknown, variable factor.** The meter weights cache reads far below list price (roughly 4–5× on Pro, `adhoc_quotas_analysis/CONCLUSIONS.md` §4), and the dollars-per-percent ratio varies about ±30% between windows.
 
 Rule of thumb: **enforce on percent, compare on dollars, diagnose on tokens.**
 
-Conversion constants, from `CONCLUSIONS.md` (measured, not published):
+Conversion constants, from `adhoc_quotas_analysis/CONCLUSIONS.md` (measured, not published; a percent of one plan is never compared with another's):
 
-| | Claude (Pro) | Codex (Plus) |
+| Plan, period | 100% of one 5-hour window | 5-hour windows per week |
 |---|---|---|
-| 100% of one 5-hour window | ≈ $32 (middle 80%: $20–39) | ≈ $20.5 (range $16.7–26.3) |
-| 100% of the 7-day period | ≈ 8.85 five-hour windows, ≈ $283–314 | ≈ 6.2 five-hour windows, ≈ $127 |
-| 1% of the 7-day period | ≈ $2.8 | ≈ $1.3 |
+| Claude Pro, 2026-08/09 | ≈ $32 at list price (middle 80%: $20–39) | 9.9 with the promo, 8.85 after |
+| Claude Pro, 10-05 → 10-07 | ≈ $47 in Claude Code's $ (6 windows) | 7.8 (median of 30 windows, 09-01 → 10-07) |
+| Claude Max 5x, since 10-07 | ≈ $202 in Claude Code's $ (4 windows): ≈ 4.3× Pro | 7.5 (7 windows) |
+| Codex Plus, 2026-08/09 | ≈ $20.5 at gpt-5.6-sol list price | 6.2 |
 
 ---
 
@@ -284,7 +285,7 @@ These describe usage credits bought beyond the plan (none here), not the cost of
 
 ### 5.1 Codex's fake idle countdown
 
-When no window is running, the Codex API returns `used_percent == 0` with `resets_at ≈ now + window span`. This is **not** a fresh empty window: it means *no window is open*. Drop it **[rule from `quota_model.py`]**.
+When no window is running, the Codex API returns `used_percent == 0` with `resets_at ≈ now + window span`. This is **not** a fresh empty window: it means *no window is open*. Drop it **[rule from the retired `quota_model.py`, `adhoc_quotas_analysis/CONCLUSIONS.md` §4]**.
 
 ### 5.2 Windows exist only because a message opened one
 
@@ -311,7 +312,7 @@ Observed 09-07 19:20, 09-15 09:14, 09-19 11:24, then **04:13 and 09:05 for the s
 - **Quota percent per session or thread.** Codex's `thread_usage/query_v2` has the fields but returns `unavailable`.
 - **Fractional quota for Claude.** The headers carry whole percents.
 - **Codex spend at any granularity** on a Plus account (403 or `null` everywhere, §4.5).
-- **The conversion factor between one saturated 5-hour window and the 7-day meter.** Unpublished; `CONCLUSIONS.md` estimates it (Claude ≈ 8.85 windows/week, Codex ≈ 6.2).
+- **The conversion factor between one saturated 5-hour window and the 7-day meter.** Unpublished; `adhoc_quotas_analysis/CONCLUSIONS.md` measures it (Claude Pro ≈ 7.8 five-hour windows per week, Max 5x ≈ 7.5, Codex ≈ 6.2).
 - **Demand above the cap.** When a window saturates, what the user *wanted* is unrecorded — only what they were allowed to spend. 5 of 35 Claude windows reached 100%, ≈ 4 hours at the cap over 30 days **[verified]**.
 
 ---

@@ -8,15 +8,14 @@ The design (`design/TARGET_SPEC.md`) is built: phases 0–5 of `design/MIGRATION
 |---|---|---|
 | 1 | Check after a night with the Mac asleep that the VM polled then, and only then (`account_quotas` rows with `source = 'claude_api'` by `machine`) | so far the VM has not polled once while the Mac was awake, as designed; its polling while the Mac sleeps is not yet seen |
 | 2 | The VM's `~/AGENTS.md` (Oct 9) still describes `state/quota/claude`: refreshed by the next `bootstrap-home` run there | the template (`bootstrap-home` `17404ef`) and the Mac's copy are current |
-| 4 | `adhoc_quotas_analysis/AGENTS.md` is 9,835 words (docs checker limit 600): move the investigation history to `doc/` | concern C13; pre-existing |
 | 5 | auto-apply's Agent SDK sessions send no telemetry, so their slots carry `tokens_without_usd` only: give them the telemetry env keys (in auto-apply) | concern C7 |
-| 6 | Parked: who runs the transcript reader on the VM (a reader's own job, eventually) | — |
+| 6 | Parked: who runs the transcript reader on the VM (a reader's own job, eventually) | 5 windows opened with no activity in the Mac's slots (`adhoc_quotas_analysis/CONCLUSIONS.md` §1): the VM's usage is the first suspect |
 
 ## Usage per project and per kind of use (development / test runs / scheduled runs)
 
 Requested 2026-10-07 by the user, from the `auto-apply` project. Prompt for the agent working here:
 
-**Status 2026-10-10:** the data this asks for is built: `slots` in `data/claude/aggregates.db` (per 5-min slot × machine × folder × entrypoint × model, every request once, Claude Code's own `usd` and `tokens_without_usd`; `FOR_READERS.md`). What remains is the report itself (the user's draft `adhoc_quotas_analysis/usage_by_project_draft.py`). No $ is computed here any more: where `usd` is missing, report tokens, not a list-price estimate. The decisions and build plan of 2026-10-07 → 10-08 are in git history and `USAGE_DATA_REFERENCE.md` §6.
+**Status 2026-10-11:** built. The data: `slots` in `data/claude/aggregates.db` (`FOR_READERS.md`). The report: `python3 adhoc_quotas_analysis/usage_split.py --by project|kind|machine|model --span 7d|5h|day` (the $ and tokens of each window or day, per group). Left: auto-apply's Agent SDK sessions have no $, only tokens (item 5 above); the split by pipeline step (first words of a session's prompt, the user's draft `adhoc_quotas_analysis/usage_by_project_draft.py`) needs the transcripts and is not in `slots`. No $ is computed here: where `usd` is missing, the tokens are reported.
 
 ### Why
 
@@ -134,11 +133,10 @@ Parked by the user on 2026-10-10: the first target design is Claude only. Until 
 
 ## Re-measure the Claude budgets on Max 5x
 
-The plan changed from Pro to Max 5x on 2026-10-07 about 16:51Z (`USAGE_DATA_REFERENCE.md` §6). Every Claude figure in `adhoc_quotas_analysis/CONCLUSIONS.md` is for Pro. Once a few Max 5x windows have peaked at 30% or more:
+The plan changed from Pro to Max 5x on 2026-10-07 about 16:51Z (`USAGE_DATA_REFERENCE.md` §6). First measure, 2026-10-11 (`adhoc_quotas_analysis/budgets.py`, `CONCLUSIONS.md` §2): a Max 5x 5-hour window holds about $202 of Claude Code's $ against $47 on Pro, **about 4.3×, not 5×**; 4 windows at 30% or more, no full week yet. Left:
 
-- add a plan cutoff to `quota_model.py` and `window_gaps.py` so Pro and Max 5x windows are never mixed;
-- re-measure the 5-hour budget in list-price $ (Pro: median $32; 5× would be about $160), the 7-day/5-hour meter ratio (Pro: 8.85) and the token-type weights (Pro: cache reads count about 4–5× less than list price);
-- answer whether the multiplier is really 5× for both meters.
+- re-run `budgets.py` once a full Max week has passed and 10 or more windows have reached 30%, and update `CONCLUSIONS.md` §2;
+- the token-type weights (on Pro, cache reads counted 4–5× less than list price) are not re-measured: it needs a fit per token column.
 
 ## Claude poller cadence without agent-statusline
 

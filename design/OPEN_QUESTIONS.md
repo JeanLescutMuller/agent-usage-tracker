@@ -16,7 +16,7 @@ Status 2026-10-10: **everything here is settled.** The decisions became `design/
 | C10 | Machine names could drift | settled by the rule "Machine name" in `~/AGENTS.md` (commit `f71f282`) |
 | C11 | Poll thresholds | Mac 110 / 300 s, VM 290 / 480 s (P4), live since phase 1 |
 | C12 | `TODO.md`'s target-design table outdated | rewritten in phase 5 |
-| C13 | Docs checker failures | `AGENTS.md` trimmed to 581 words, the broken `PLAN.md` link fixed; left: `adhoc_quotas_analysis/AGENTS.md` too long (`TODO.md` item 4) |
+| C13 | Docs checker failures | `AGENTS.md` trimmed to 581 words, the broken `PLAN.md` link fixed; the last one, `adhoc_quotas_analysis/AGENTS.md` too long, went with the folder's rewrite on 2026-10-11 |
 | C14 | `DESIGN_MAP.html` is a design page, not a README | done 2026-10-11: it became `README.html` (`README.md` its stub) |
 
 Decided with the user along the way (all in `design/TARGET_SPEC.md`): the four categories; `slots` as one table (no `session_id`, no `session_totals`); intermediary tables kept local; `FOR_READERS.md` for every reader (agent-quota-maximizer gets no change: it will be decommissioned); Option A for the other repos (agent-statusline, auto-apply, bootstrap-home, job-runner): the agent edits, tests, deploys and commits.

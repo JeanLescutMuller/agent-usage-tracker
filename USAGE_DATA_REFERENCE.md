@@ -239,7 +239,7 @@ Every percent we record is a whole number in practice — 0 fractional among 255
 
 ### 5.2 Stale readings, and the envelope rule
 
-**Within one quota window the true percentage never decreases, so keep only the *first* reading of each new running maximum, and discard everything at or below it.** The name comes from `adhoc_quotas_analysis/quota_model.py`'s `envelope()`.
+**Within one quota window the true percentage never decreases, so keep only the *first* reading of each new running maximum, and discard everything at or below it.** `adhoc_quotas_analysis/load.py`'s `windows()` applies it (a window's `steps`).
 
 It is a correctness fix, not an optimisation. Idle renderers re-push readings taken much earlier, so the same minute can hold:
 
@@ -291,7 +291,7 @@ The Claude poller borrows each machine's Claude Code login, whose access token l
 |---|---|---|
 | 2026-08-26 | Claude poller stops logging `token_deltas` / `baseline`, adds `api_headers` | Older rows have the old shape |
 | 2026-08-30 | `source` key added | Older rows have none; treat as `"claude"` (`"claude_api"` since 2026-10-04) |
-| 2026-08-31 | Combined `data/quota-log.jsonl` split per provider; push path added | See `adhoc_quotas_analysis/AGENTS.md` "Naming history" |
+| 2026-08-31 | Combined `data/quota-log.jsonl` split per provider; push path added | See "Naming history" in `git show 12956dc:adhoc_quotas_analysis/AGENTS.md` |
 | 2026-09-29 | Push stops rounding the percent before logging | No practical effect: upstream values are whole (§5.1). Only matters if Anthropic ever sends fractions |
 | 2026-09-29 | Push adds `session_id` + `session_cost_usd` | Per-session spend over time, interactive sessions only |
 | 2026-09-30 | Push `observed_at` converted by calendar arithmetic instead of jq's `fromdateiso8601` | Earlier push rows written during DST are +3,600 s (§5.3) |
@@ -342,8 +342,8 @@ Deliberately not captured because it already persists elsewhere: Codex per-turn 
 |---|---|
 | Row shapes and counts | `python3 -c "import sqlite3,json,collections;d=sqlite3.connect('data/claude/account_quotas.db');print(collections.Counter(tuple(sorted(json.loads(r))) for (r,) in d.execute('SELECT raw FROM account_quotas')).most_common())"` |
 | Poller failure rate | `SELECT source, COUNT(*) FROM poll_errors GROUP BY source` against the same in `account_quotas` |
-| Nothing lost in the 2026-10-08 migration | `python3 adhoc_quotas_analysis/migrate_to_sqlite.py --logs data/_archive/pre-sqlite-20261008T090432Z/logs` after copying the archived JSONL back into a scratch runtime (`--runtime`): every line must be found, 0 inserted |
-| Envelope compression | Apply `quota_model.py`'s `envelope()` and compare row counts |
+| Nothing lost in the 2026-10-08 migration | `git checkout 12956dc -- adhoc_quotas_analysis/migrate_to_sqlite.py`, then `python3 adhoc_quotas_analysis/migrate_to_sqlite.py --logs data/_archive/pre-sqlite-20261008T090432Z/logs` after copying the archived JSONL back into a scratch runtime (`--runtime`): every line must be found, 0 inserted |
+| Envelope compression | Count the `steps` of `load.windows()` (`adhoc_quotas_analysis/load.py`) against the readings |
 | Fractional percent | `SELECT COUNT(*) FROM account_quotas WHERE five_hour_pct != CAST(five_hour_pct AS INT)` |
 | Writer behaviour | `bash tests/run.sh` (`tests/README.md` lists what each file covers) |
 | Scope rule holds | No percent-like key path (`pct\|percent\|utiliz\|basis_points`) in any `raw` of `sessions_usages.db`; no `account_quotas.raw` with `session_cost_usd`, `prompt_cache` or a bare `session_id`. Both gates refuse such rows |
