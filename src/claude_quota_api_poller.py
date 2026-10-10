@@ -134,7 +134,10 @@ def fetch_usage(token: str) -> tuple[dict | None, dict | None, dict | None]:
             d_headers = {k: v for k, v in resp.headers.items() if k.lower() in HEADERS_TO_KEEP}
             return d_body, d_headers, None
     # HTTPError first - it subclasses URLError. The status is the whole point:
-    # 401 means the OAuth token expired and Claude Code needs a re-login, 429
+    # 401 means the OAuth access token expired (8 h lifetime): this poller only
+    # reads it and never renews it, so it 401s whenever no `claude` process ran
+    # here in the last 8 h - the next `claude` run renews it. Only if the
+    # refresh token itself expired (refreshTokenExpiresAt) is a re-login needed. 429
     # means our own 5-minute polling is being rate-limited, 5xx is Anthropic's
     # side. Those need completely different responses, and until now the log
     # recorded all three identically as `"api": null`.
