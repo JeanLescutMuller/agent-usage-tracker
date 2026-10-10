@@ -1,0 +1,11 @@
+#!/bin/bash
+# ~/opt/agent-usage-tracker/aggregates.sh: job agent-usage-tracker.aggregates.
+# Requirements (design/TARGET_SPEC.md §6, §8):
+#   - Claude transcripts -> intermediary/ (each request once) -> the final 5-min slots -> data/claude/aggregates.db;
+#     Codex session files -> data/codex/sessions_usages.db as before; Mac and VM, each for itself
+#   - every 5 min (Mac StartInterval 300; VM OnUnitActiveSec=5min); incremental (a byte offset per file)
+#   - timeout 5 min, as long as the tick: no overlap, two runs would read the same bytes (claim, lockfile)
+#   - summary: its last line ("slots: 12 written (… → …), 40 requests")
+. ~/opt/job-runner/lib.sh
+jr_claim 5                               # the lockfile; held: SKIP "$JR_WHY"
+jr_execute 5 python3 src/aggregate_slots.py

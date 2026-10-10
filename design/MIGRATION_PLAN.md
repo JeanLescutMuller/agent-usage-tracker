@@ -70,6 +70,8 @@ Undo: restore the two archived `account_quotas.db` (1.3, 1.4), previous commit. 
 
 ## Phase 2 · Category 3: intermediary, slots, job `aggregates`
 
+**Done 2026-10-10, 21:39 UTC (Mac) / 21:40 (VM)**: first run on the Mac read 1,074 MB of transcripts in 5.8 s (35 s with the slots of 10 weeks), 22,802 requests, 2,944 slots; `check-intermediary`: every one of the 22,794 old requests found again with the same tokens, and the slots equal a separate count (24,004 requests, 5,725,939,912 tokens, $866.332646, 3,756,854,637 tokens without $). VM: 189 requests, 41 slots, same checks. The next run (21:44) wrote 1 slot in under a second. Step 2.4 needed no hand run: the job's own first run did it. `remove-trigger` now also clears systemd's "failed" record of the removed timer.
+
 | # | Where | Step |
 |---|---|---|
 | 2.1 | code | P7 (`intermediary/`), `aggregate_slots.py`, P10 (`ingest_aggregates.py`), P8 (`slots` columns), `transcript_reader.py` writes Claude requests to `intermediary/` (no `usd`, no `machine`), `jobs/aggregates.sh` without the send step yet; Codex part unchanged |

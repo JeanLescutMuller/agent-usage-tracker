@@ -47,7 +47,8 @@ transcript_reader.py (every 5 min) ──────┘
 | `codex_quota_api_poller.py` | Job `codex-quota` (Mac, 60 s tick); skips while a Codex session file is fresh | `codex app-server` JSON-RPC | Account gate (`codex_app_server`) |
 | `codex_plan_history_poller.py` | Job `codex-plan-history` (Mac, hourly tick); one fetch a day, 1 h after a failure | ChatGPT backend `plan_limit_history` | Account gate (`codex_plan_limit_history`) |
 | `telemetry_receiver.py` | Its own KeepAlive LaunchAgent on `127.0.0.1:4318`; Claude Code pushes to it | Claude Code OpenTelemetry events | Sessions gate (`telemetry` table) |
-| `transcript_reader.py` | Job `transcripts`, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Sessions gate (`requests` table of each agent): one row per Claude API request once it is 15 min old, one per Codex turn |
+| `transcript_reader.py` | Job `aggregates`, every 5 min; incremental (byte offset per file) | `~/.claude/projects/**/*.jsonl`, `~/.codex/{sessions,archived_sessions}/**/*.jsonl` | Claude: `intermediary/claude/requests.db` (local working tables, one row per API request once it is 15 min old); Codex: the sessions gate (`requests`), one row per turn |
+| `aggregate_slots.py` | Job `aggregates`, right after the reader | `intermediary/`, `telemetry` | `ingest_aggregates.py` (the gate) → `data/claude/aggregates.db` `slots`: each final 5-min slot once |
 | `receive_from_machine.py` | On the VM, run over ssh by another machine's `push_to_central.py` | That machine's new rows | Both gates, into `central/<machine>/` (see "Central store on the VM") |
 
 Details, table shapes, views and traps: `USAGE_DATA_REFERENCE.md`. Why the push path exists at all (the poll endpoint 429s ~21% of the time, and can lock out for days): `adhoc_quotas_analysis/AGENTS.md`.
@@ -93,7 +94,7 @@ Without agent-statusline there are no push rows: Claude Code runs a single `stat
 
     ~/opt/agent-usage-tracker/
     ├── bin/ingest-claude-statusline.sh   the statusline's entry point (see the contract above)
-    ├── {claude-quota,codex-quota,codex-plan-history,transcripts,push}.sh   the jobs' job-runner entrypoints (from jobs/; Linux: no Codex jobs)
+    ├── {claude-quota,codex-quota,codex-plan-history,aggregates,push}.sh   the jobs' job-runner entrypoints (from jobs/; Linux: no Codex jobs)
     ├── src/                              usage_db.py, the two ingest_*.py gates, the collectors
     ├── data/                             see USAGE_DATA_REFERENCE.md §1
     │   ├── claude/

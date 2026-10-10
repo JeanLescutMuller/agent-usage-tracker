@@ -119,4 +119,48 @@ step "$VM" vm cat1-machine --shared "$SHARED" >/dev/null; step "$VM" vm cat1-see
 assert_eq "re-running both changes nothing" "$before" "$(qq "$VM/data/claude/account_quotas.db" "SELECT group_concat(ts || machine) FROM account_quotas")"
 assert_eq "...and takes no second copy" "2" "$(ls "$VM/data/_archive" | grep -c 'pre-machine')"
 
+section "phase 2: remove-trigger, check-intermediary"
+P2="$TMP/p2/opt/agent-usage-tracker"
+mkdir -p "$TMP/p2/Library/LaunchAgents" "$TMP/p2/.config/systemd/user" "$P2"
+touch "$P2/transcripts.sh"
+if [ "$(uname)" = Darwin ]; then   # this OS's trigger files only: the step removes those
+    touch "$P2/com.jeanlescut.agent-usage-tracker.transcripts.plist"
+    ln -s "$P2/com.jeanlescut.agent-usage-tracker.transcripts.plist" "$TMP/p2/Library/LaunchAgents/com.jeanlescut.agent-usage-tracker.transcripts.plist"
+else
+    touch "$P2/com.jeanlescut.agent-usage-tracker.transcripts.timer"
+    ln -s "$P2/com.jeanlescut.agent-usage-tracker.transcripts.timer" "$TMP/p2/.config/systemd/user/com.jeanlescut.agent-usage-tracker.transcripts.timer"
+fi
+out="$(HOME="$TMP/p2" python3 "$MIGRATE" remove-trigger transcripts --runtime "$P2")"
+assert_contains "the job's trigger and entrypoint removed" "$out" "transcripts.sh"
+assert_eq "...nothing of it left" "" "$(find "$TMP/p2" -name '*transcripts*' | grep -v _archive)"
+assert_contains "re-running: nothing to remove" "$(HOME="$TMP/p2" python3 "$MIGRATE" remove-trigger transcripts --runtime "$P2")" "nothing (already gone)"
+
+# The old requests table, the same requests in intermediary/, telemetry, then the slots: they agree.
+export AGENT_USAGE_TRACKER_RUNTIME="$P2" JR_MACHINE_NAME=m1
+S1=11111111-1111-1111-1111-111111111111
+python3 - <<PY
+import sys, time; sys.path.insert(0, "$REPO_ROOT/src")
+import usage_db, ingest_session_usage as s, aggregate_slots as a
+old, inter = usage_db.open_sessions("claude"), usage_db.open_intermediary("claude")
+for ts, rid, out in ((1000, "r1", 10), (1100, "r2", 20), (1400, "r3", 30)):
+    s.add_requests(old, [dict(ts=ts, dt="x", request_id=rid, machine="m1", session_id="$S1", folder="/a", entrypoint="cli", model="m",
+                              input_tokens=1, output_tokens=out, cache_read_tokens=100, cache_write_5m_tokens=0, cache_write_1h_tokens=0, usd=None)])
+    inter.execute("INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (ts, "x", rid, "$S1", "/a", "cli", "m", 1, out, 100, 0, 0))
+s.add_telemetry(old, {"source": "claude_otel", "observed_at": 1010, "received_at": 1010, "event": "api_request",
+                      "attributes": {"session.id": "$S1", "request_id": "r1", "model": "m", "cost_usd": 0.5}})
+s.add_telemetry(old, {"source": "claude_otel", "observed_at": 1150, "received_at": 1150, "event": "api_request",
+                      "attributes": {"session.id": "$S1", "request_id": "t1", "model": "h", "input_tokens": 4, "cache_creation_tokens": 6, "cost_usd": 0.1}})
+inter.execute("INSERT INTO scans VALUES (1950, 'x', 1900, 0)")
+a.transcript_reader.main = lambda: ""
+time.time = lambda: 2000
+a.main()
+PY
+out="$(python3 "$MIGRATE" check-intermediary --runtime "$P2")"
+assert_contains "every old request in intermediary/" "$out" "old requests 3, in intermediary 3; missing 0, different 0"
+assert_contains "the slots agree with a separate count" "$out" "slots (4, 373, 0.6, 252), counted (4, 373, 0.6, 252)"
+python3 -c 'import sqlite3, sys; db = sqlite3.connect(sys.argv[1]); db.execute("DELETE FROM requests WHERE request_id = \"r2\""); db.commit()' "$P2/intermediary/claude/requests.db"
+python3 "$MIGRATE" check-intermediary --runtime "$P2" >/dev/null 2>&1
+assert_status "a request missing from intermediary/: exit 1" 1 $?
+unset AGENT_USAGE_TRACKER_RUNTIME JR_MACHINE_NAME
+
 harness_summary

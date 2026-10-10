@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for src/transcript_reader.py: one row per API request from fixture
-# transcripts - the largest-output line wins, a request is stored only once
+# transcripts, into intermediary/ (Claude) - the largest-output line wins, a request is stored only once
 # 15 min old, a resumed copy is not counted twice, and a run with nothing
 # new reads nothing. The clock is faked (NOW); no real transcript is read.
 set -uo pipefail
@@ -10,7 +10,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-transcripts.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 RT="$TMP/rt"
 PROJ="$TMP/projects"
-SDB="$RT/data/claude/sessions_usages.db"
+SDB="$RT/intermediary/claude/requests.db"   # Claude requests: the local working tables (design/TARGET_SPEC.md §5)
 CODEX="$TMP/codex"
 mkdir -p "$PROJ/-Users-x-dev-app" "$PROJ/-Users-x-opt-job" "$CODEX/sessions/2026/10/08" "$CODEX/archived_sessions"
 
@@ -51,8 +51,9 @@ assert_eq "the largest output wins, not the first or last line" "500" "$(q "SELE
 assert_eq "ts = first line, folder, entrypoint, session" "$T0	2026-10-08T12:00:00Z	/Users/x/dev/app	cli	s1" \
     "$(q "SELECT ts, dt, folder, entrypoint, session_id FROM requests")"
 assert_eq "cache writes split 5m / 1h" "100	200" "$(q "SELECT cache_write_5m_tokens, cache_write_1h_tokens FROM requests")"
-# opus-5: 2x5 + 500x25 + 1e6x5x0.1 + 100x6.25 + 200x10 = 515135 / 1e6
-assert_eq "list-price USD" "0.515135" "$(q "SELECT ROUND(usd, 6) FROM requests")"
+assert_eq "no USD and no machine: no \$ computed here, always this machine" "0" \
+    "$(q "SELECT COUNT(*) FROM pragma_table_info('requests') WHERE name IN ('usd', 'machine')")"
+assert_file_missing "nothing written to the sessions database" "$RT/data/claude/sessions_usages.db"
 assert_eq "the scan says everything before now - 15 min is in" "$((T0 + 60))" "$(q "SELECT complete_through_ts FROM scans")"
 
 section "a later run picks up the request that was too young"
@@ -82,11 +83,11 @@ printf '%s' "$(line 2026-10-08T12:31:00.000Z req_e 1)" | head -c 60 >> "$APP"
 read_at $((T0 + 4000)) >/dev/null
 assert_eq "nothing added from a partial line" "4" "$(q "SELECT COUNT(*) FROM requests")"
 
-section "an unknown model is stored with usd NULL"
-line 2026-10-08T12:40:00.000Z req_f 1 > "$PROJ/-Users-x-dev-app/s3.jsonl"
-sed -i '' 's/claude-opus-5/claude-future-9/' "$PROJ/-Users-x-dev-app/s3.jsonl"
+section "intermediary/ deleted: everything is read again, the same rows"
+before="$(q "SELECT group_concat(request_id || output_tokens) FROM (SELECT * FROM requests ORDER BY request_id)")"
+rm -rf "$RT/intermediary"
 read_at $((T0 + 5000)) >/dev/null
-assert_eq "usd NULL" "claude-future-9	" "$(q "SELECT model, usd FROM requests WHERE request_id = 'req_f'")"
+assert_eq "rebuilt identical" "$before" "$(q "SELECT group_concat(request_id || output_tokens) FROM (SELECT * FROM requests ORDER BY request_id)")"
 
 section "Codex: one row per turn, repeats skipped, cached input split out"
 CDB="$RT/data/codex/sessions_usages.db"

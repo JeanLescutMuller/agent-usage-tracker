@@ -184,6 +184,61 @@ CREATE VIEW usage_5m AS
     GROUP BY slot_ts, folder, interactive;
 """
 
+# Category 3 (design/TARGET_SPEC.md §6): data/<agent>/aggregates.db, one
+# table. A slot row is written once, when final, and never changes; the
+# whole database is sent to the VM. Written only by ingest_aggregates.py.
+AGGREGATES_SCHEMA = """
+CREATE TABLE slots (                 -- one row per 5-min slot × machine × folder × entrypoint × model
+    ts INTEGER NOT NULL,              -- slot start, a multiple of 300
+    dt TEXT NOT NULL,
+    machine TEXT NOT NULL,            -- where the requests ran
+    folder TEXT NOT NULL,             -- the session's working directory (cwd); '' when unknown
+    entrypoint TEXT NOT NULL,         -- cli (interactive terminal), sdk-cli (claude -p), sdk-py (Agent SDK), ...; '' when unknown
+    model TEXT NOT NULL,
+    requests INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_5m_tokens INTEGER NOT NULL,
+    cache_write_1h_tokens INTEGER NOT NULL,
+    cache_write_unknown_tokens INTEGER NOT NULL,  -- telemetry-only requests: telemetry gives no 5m / 1h split
+    usd REAL,                         -- Claude Code's own cost_usd (telemetry), summed over the requests that have one; NULL: none has
+    tokens_without_usd INTEGER NOT NULL,          -- every token of the requests with no cost_usd: what usd does not cover
+    written_ts INTEGER NOT NULL,
+    UNIQUE (ts, machine, folder, entrypoint, model)
+);
+CREATE INDEX slots_machine_ts ON slots(machine, ts);
+"""
+
+# intermediary/<agent>/requests.db (design/TARGET_SPEC.md §5): the working
+# tables between Category 2 and Category 3. Local, never sent; deleting
+# intermediary/ is always safe (the next run re-reads every transcript).
+# Written only by transcript_reader.py.
+INTERMEDIARY_SCHEMA = """
+CREATE TABLE requests (              -- one row per API request found in a transcript, counted once
+    ts INTEGER NOT NULL,              -- the request's first transcript line
+    dt TEXT NOT NULL,
+    request_id TEXT NOT NULL UNIQUE,
+    session_id TEXT,
+    folder TEXT,                      -- the execution folder (cwd)
+    entrypoint TEXT,
+    model TEXT,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_5m_tokens INTEGER NOT NULL,
+    cache_write_1h_tokens INTEGER NOT NULL
+);
+CREATE INDEX requests_ts ON requests(ts);
+CREATE INDEX requests_session ON requests(session_id);
+CREATE TABLE scans (                 -- one row per transcript_reader.py run
+    ts INTEGER NOT NULL,
+    dt TEXT NOT NULL,
+    complete_through_ts INTEGER NOT NULL,  -- every request that started before this is in `requests`
+    requests_added INTEGER NOT NULL
+);
+"""
+
 # Claude list prices, $ per million tokens: (input, output, cache-read ratio
 # to input). Cache writes cost 1.25x input (5 min) and 2x input (1 h) for
 # every model. Each row reproduces Claude Code's own cost_usd and ccusage's
@@ -263,6 +318,20 @@ def open_account(agent: str, readonly: bool = False):
 
 def open_sessions(agent: str, readonly: bool = False):
     return connect(db_path(agent, "sessions_usages"), SESSIONS_SCHEMA, readonly)
+
+
+def open_aggregates(agent: str, readonly: bool = False):
+    return connect(db_path(agent, "aggregates"), AGGREGATES_SCHEMA, readonly)
+
+
+def intermediary_dir(agent: str) -> Path:
+    if agent not in AGENTS:
+        raise ValueError(f"unknown agent {agent!r}")
+    return RUNTIME_DIR / "intermediary" / agent
+
+
+def open_intermediary(agent: str, readonly: bool = False):
+    return connect(intermediary_dir(agent) / "requests.db", INTERMEDIARY_SCHEMA, readonly)
 
 
 def row_hash(raw: str, key: str = "") -> str:

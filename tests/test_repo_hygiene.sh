@@ -45,15 +45,18 @@ assert_eq "nothing references agent-statusline's source tree" "" "$sources_statu
 
 section "only the gates write to a database"
 # SQL that changes data or schema lives in usage_db.py (the schema) and the
-# two ingest_*.py gates, nowhere else under src/ or bin/.
+# three ingest_*.py gates, nowhere else under src/ or bin/ - except
+# transcript_reader.py's writes to intermediary/ (local working tables, not
+# data: design/TARGET_SPEC.md §5).
 writes="$(grep -nE '"(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER) ' "$REPO_ROOT"/src/*.py "$REPO_ROOT"/bin/* 2>/dev/null \
-    | grep -v -e '/src/usage_db.py:' -e '/src/ingest_account_quota.py:' -e '/src/ingest_session_usage.py:' || true)"
+    | grep -v -e '/src/usage_db.py:' -e '/src/ingest_account_quota.py:' -e '/src/ingest_session_usage.py:' -e '/src/ingest_aggregates.py:' \
+    -e '/src/transcript_reader.py:.*INTO requests ' -e '/src/transcript_reader.py:.*INTO scans ' || true)"
 assert_eq "no data-changing SQL outside the gates" "" "$writes"
 appends="$(grep -nE 'O_APPEND|open\([^)]*"a"' "$REPO_ROOT"/src/*.py "$REPO_ROOT"/bin/* 2>/dev/null || true)"
 assert_eq "no collector appends to a data file" "" "$appends"
-gate_calls="$(grep -lE 'ingest_account_quota\.add_row|ingest_session_usage\.add_' "$REPO_ROOT"/src/*.py | xargs -n1 basename | sort | paste -sd ' ' -)"
+gate_calls="$(grep -lE 'ingest_account_quota\.add_row|ingest_session_usage\.add_|ingest_aggregates\.add_' "$REPO_ROOT"/src/*.py | xargs -n1 basename | sort | paste -sd ' ' -)"
 assert_eq "the collectors that hand rows to a gate" \
-    "claude_quota_api_poller.py codex_plan_history_poller.py codex_quota_api_poller.py receive_from_machine.py statusline_payload_reader.py telemetry_receiver.py transcript_reader.py" \
+    "aggregate_slots.py claude_quota_api_poller.py codex_plan_history_poller.py codex_quota_api_poller.py receive_from_machine.py statusline_payload_reader.py telemetry_receiver.py transcript_reader.py" \
     "$gate_calls"
 
 harness_summary

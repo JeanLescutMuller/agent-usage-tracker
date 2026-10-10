@@ -13,7 +13,7 @@
 #   databases), the collectors, and usage_db.py;
 # - the jobs' job-runner entrypoints (<job>.sh, from jobs/) and one trigger
 #   each, com.jeanlescut.agent-usage-tracker.<job>: claude-quota (60s tick),
-#   transcripts and push (every 5 min), and on macOS only codex-quota (60s)
+#   aggregates and push (every 5 min), and on macOS only codex-quota (60s)
 #   and codex-plan-history (hourly); each entrypoint decides, works and
 #   records its checks through job-runner (separate project,
 #   ~/opt/job-runner/lib.sh);
@@ -150,7 +150,7 @@ _schedule() {
 
 # Each job: name, its trigger's interval in seconds (as in the header of its
 # entrypoint, jobs/<job>.sh). The Codex jobs only where Codex is (the Mac).
-JOBS="claude-quota:60 transcripts:300 push:300"
+JOBS="claude-quota:60 aggregates:300 push:300"
 [ "$OS" = Darwin ] && JOBS="$JOBS codex-quota:60 codex-plan-history:3600"
 
 step "runtime layout"

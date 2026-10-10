@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Collector: reads Claude Code's transcripts (~/.claude/projects/**/*.jsonl,
-subagents included) and Codex's session files (~/.codex/sessions and
-archived_sessions), and hands one row per API request (Claude) or per turn
-(Codex) to ingest_session_usage.py (data/<agent>/sessions_usages.db, table
-`requests`): when it happened, its session, execution folder (cwd),
-entrypoint (cli = interactive), model, the token counts and its USD.
+"""Reads Claude Code's transcripts (~/.claude/projects/**/*.jsonl, subagents
+included) and Codex's session files (~/.codex/sessions and
+archived_sessions): one row per API request (Claude) or per turn (Codex):
+when it happened, its session, execution folder (cwd), entrypoint (cli =
+interactive), model and token counts.
+  - Claude (since 2026-10, design/TARGET_SPEC.md §5): into
+    intermediary/claude/requests.db (tables `requests`, `scans`), the local
+    working tables aggregate_slots.py turns into 5-min slots. Written here
+    directly, not through a gate: intermediary/ is not data, never sent,
+    and deleting it is always safe (the next run reads everything again).
+    No USD (no $ computed by us) and no machine (always this one).
+  - Codex (unchanged, out of the first target): through ingest_session_usage.py
+    into data/codex/sessions_usages.db, with the USD of usage_db.PRICES.
 
-Run every 5 minutes by its LaunchAgent. Incremental: a byte offset per file
-(state/transcript_reader/offsets.json) means a run with nothing new reads
-nothing; a replaced or truncated file is read again from the start.
+Run every 5 minutes by the `aggregates` job, from aggregate_slots.py.
+Incremental: a byte offset per file (intermediary/claude/offsets.json;
+Codex: state/transcript_reader/codex_offsets.json) means a run with nothing
+new reads nothing; a replaced or truncated file is read again from the start.
 
 Insert-only, so a request is stored once, when complete. A request is
 written as several transcript lines sharing one requestId, with
@@ -25,9 +33,8 @@ Each run then records a scan whose complete_through_ts is now - 15 min:
 every request that started before it is in the database.
 
 The requests only telemetry sees (prompt suggestions, compaction, web
-search, titles: about 4.6% of USD) are added by the `usage_requests` view
-from the telemetry table, not here. USD here is from usage_db.PRICES, which
-matches Claude Code's own figure exactly (USAGE_DATA_SOURCES.md §3.4).
+search, titles) are added by aggregate_slots.py from the telemetry table,
+not here.
 
 Codex (read_codex_file): one session file per thread. Each `token_count`
 event carries that turn's usage (`last_token_usage`) and the thread's running
@@ -52,11 +59,13 @@ import ingest_session_usage
 import usage_db
 
 PROJECTS_DIR = Path(os.environ.get("AGENT_USAGE_TRACKER_TRANSCRIPTS") or Path.home() / ".claude" / "projects")
-OFFSETS_FILE = usage_db.RUNTIME_DIR / "state" / "transcript_reader" / "offsets.json"
+OFFSETS_FILE = usage_db.intermediary_dir("claude") / "offsets.json"   # deleted with intermediary/: all read again
 CODEX_DIRS = [Path(p) for p in (os.environ.get("AGENT_USAGE_TRACKER_CODEX_SESSIONS") or "").split(":") if p] or \
     [Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "archived_sessions"]
 CODEX_OFFSETS_FILE = usage_db.RUNTIME_DIR / "state" / "transcript_reader" / "codex_offsets.json"
 FINAL_AFTER_SECONDS = 900
+INTERMEDIARY_COLUMNS = ("ts", "dt", "request_id", "session_id", "folder", "entrypoint", "model", "input_tokens",
+                        "output_tokens", "cache_read_tokens", "cache_write_5m_tokens", "cache_write_1h_tokens")
 
 
 def _epoch(stamp) -> int | None:
@@ -103,7 +112,6 @@ def read_file(path: str, offset: int, complete_before: int, d_found: dict) -> in
         elif out > (l_entry[2]["message"]["usage"].get("output_tokens") or 0):
             l_entry[2] = d_rec
     next_offset = offset + end
-    machine = usage_db.machine_name()
     for key, (ts, line_start, d_rec) in d_seen.items():
         if ts > complete_before:
             next_offset = min(next_offset, line_start)
@@ -113,16 +121,13 @@ def read_file(path: str, offset: int, complete_before: int, d_found: dict) -> in
         cache_write = d_usage.get("cache_creation_input_tokens") or 0
         cache_write_1h = (d_usage.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0
         d_row = {
-            "ts": ts, "dt": usage_db.iso(ts), "request_id": key, "machine": machine,
+            "ts": ts, "dt": usage_db.iso(ts), "request_id": key,
             "session_id": d_rec.get("sessionId"), "folder": d_rec.get("cwd"), "entrypoint": d_rec.get("entrypoint"),
             "model": d_msg.get("model"),
             "input_tokens": d_usage.get("input_tokens") or 0, "output_tokens": d_usage.get("output_tokens") or 0,
             "cache_read_tokens": d_usage.get("cache_read_input_tokens") or 0,
             "cache_write_5m_tokens": max(cache_write - cache_write_1h, 0), "cache_write_1h_tokens": cache_write_1h,
         }
-        d_row["usd"] = usage_db.request_usd(d_row["model"], d_row["input_tokens"], d_row["output_tokens"],
-                                            d_row["cache_read_tokens"], d_row["cache_write_5m_tokens"],
-                                            d_row["cache_write_1h_tokens"])
         d_found.setdefault(key, d_row)
     return next_offset
 
@@ -216,7 +221,8 @@ def read_codex(now: int) -> str:
     return f"codex: files read {n_read}, turns added {n_added}"
 
 
-def main() -> None:
+def main() -> str:
+    """One run; returns its summary line (also printed)."""
     started = time.time()
     now = int(started)
     complete_before = now - FINAL_AFTER_SECONDS
@@ -242,11 +248,17 @@ def main() -> None:
                 n_bytes += st.st_size - offset
                 offset = read_file(entry.path, offset, complete_before, d_found)
             d_new_offsets[entry.path] = (st.st_ino, offset)
-    db = usage_db.open_sessions("claude")
+    db = usage_db.open_intermediary("claude")
     db.execute("BEGIN IMMEDIATE")
     try:
-        n_added = ingest_session_usage.add_requests(db, sorted(d_found.values(), key=lambda d: d["ts"]))
-        ingest_session_usage.add_scan(db, now, complete_before, n_added)
+        n_added = 0
+        for d_req in sorted(d_found.values(), key=lambda d: d["ts"]):
+            # A request_id already stored is skipped: a resumed session copies earlier requests into its new transcript.
+            n_added += db.execute(f"INSERT OR IGNORE INTO requests ({', '.join(INTERMEDIARY_COLUMNS)}) "
+                                  f"VALUES ({','.join('?' * len(INTERMEDIARY_COLUMNS))})",
+                                  [d_req[k] for k in INTERMEDIARY_COLUMNS]).rowcount
+        db.execute("INSERT INTO scans (ts, dt, complete_through_ts, requests_added) VALUES (?,?,?,?)",
+                   (now, usage_db.iso(now), complete_before, n_added))
         db.execute("COMMIT")
     except BaseException:
         db.execute("ROLLBACK")
@@ -258,8 +270,10 @@ def main() -> None:
     tmp.write_text(json.dumps(d_new_offsets))
     tmp.replace(OFFSETS_FILE)
     codex = read_codex(now)
-    print(f"{usage_db.iso(now)} claude: files read {n_read}, {n_bytes / 1e6:.1f} MB, requests added {n_added}; {codex}; "
-          f"{time.time() - started:.2f} s", flush=True)
+    summary = (f"{usage_db.iso(now)} claude: files read {n_read}, {n_bytes / 1e6:.1f} MB, requests added {n_added}; "
+               f"{codex}; {time.time() - started:.2f} s")
+    print(summary, flush=True)
+    return summary
 
 
 if __name__ == "__main__":

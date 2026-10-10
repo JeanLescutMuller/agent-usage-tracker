@@ -37,7 +37,7 @@ assert_file_missing "no database before the first write" "$RT/data/claude/accoun
 assert_file_exists "data/claude/ created" "$RT/data/claude"
 assert_file_exists "data/codex/ created" "$RT/data/codex"
 assert_file_missing "adhoc_quotas_analysis/ is run-by-hand, never deployed" "$RT/adhoc_quotas_analysis"
-for job in claude-quota:60 codex-quota:60 codex-plan-history:3600 transcripts:300 push:300; do
+for job in claude-quota:60 codex-quota:60 codex-plan-history:3600 aggregates:300 push:300; do
     label="com.jeanlescut.agent-usage-tracker.${job%%:*}"
     assert_file_exists "${job%%:*}.sh entrypoint deployed" "$RT/${job%%:*}.sh"
     assert_contains "$label runs its entrypoint with /bin/bash" "$(cat "$RT/$label.plist")" \
@@ -94,7 +94,7 @@ run_script install.sh "$th_home"
 run_script uninstall.sh "$th_home"
 assert_status "exits 0" 0 "$TH_STATUS"
 for label in com.jeanlescut.agent-usage-tracker.otel com.jeanlescut.agent-usage-tracker.claude-quota com.jeanlescut.agent-usage-tracker.codex-quota \
-    com.jeanlescut.agent-usage-tracker.codex-plan-history com.jeanlescut.agent-usage-tracker.transcripts com.jeanlescut.agent-usage-tracker.push; do
+    com.jeanlescut.agent-usage-tracker.codex-plan-history com.jeanlescut.agent-usage-tracker.aggregates com.jeanlescut.agent-usage-tracker.push; do
     assert_file_missing "$label symlink removed" "$th_home/Library/LaunchAgents/$label.plist"
 done
 assert_file_missing "the whole runtime dir is gone when data/ was never populated" "$th_home/opt/agent-usage-tracker"
@@ -131,7 +131,7 @@ assert_status "exits 0" 0 $?
 assert_file_missing "no LaunchAgents" "$th_home/Library/LaunchAgents"
 for unit in com.jeanlescut.agent-usage-tracker.claude-quota.service com.jeanlescut.agent-usage-tracker.claude-quota.timer \
     com.jeanlescut.agent-usage-tracker.otel.service \
-    com.jeanlescut.agent-usage-tracker.transcripts.service com.jeanlescut.agent-usage-tracker.transcripts.timer \
+    com.jeanlescut.agent-usage-tracker.aggregates.service com.jeanlescut.agent-usage-tracker.aggregates.timer \
     com.jeanlescut.agent-usage-tracker.push.service com.jeanlescut.agent-usage-tracker.push.timer; do
     assert_eq "$unit: real file in the runtime, symlink in ~/.config/systemd/user" "$RT/$unit" "$(readlink "$UNITS/$unit")"
 done

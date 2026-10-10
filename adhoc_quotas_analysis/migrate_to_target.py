@@ -45,6 +45,19 @@ Subcommands (more are added as the phases are built):
            central/NAME/data/claude/account_quotas.db into
            data/claude/account_quotas.db (INSERT OR IGNORE; machine = NAME,
            shared readings NULL); then checks that none is missing.
+  remove-trigger JOB
+           (steps 2.2, 3.1) a retired job, on this machine: its trigger
+           unloaded and its files removed (macOS: the LaunchAgent link and
+           its plist; Linux: the systemd --user units), and its entrypoint
+           ~/opt/agent-usage-tracker/JOB.sh. Never uninstall.sh, which
+           stops the telemetry receiver. Idempotent.
+  check-intermediary
+           (step 2.5, every machine, after the first `aggregates` run)
+           every Claude request of the old data/claude/sessions_usages.db
+           `requests` table is in intermediary/claude/requests.db with the
+           same five token counts; and the slots written so far add up to
+           the same requests, tokens and $ as a separate count over
+           intermediary/ + telemetry. Exits 1 on any difference.
 
 Usage:
   python3 adhoc_quotas_analysis/migrate_to_target.py STEP [options] [--runtime DIR]
@@ -62,8 +75,9 @@ import time
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
-parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm"])
-parser.add_argument("job", nargs="?", help="pause: the job (e.g. claude-quota)")
+parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm",
+                                    "remove-trigger", "check-intermediary"])
+parser.add_argument("job", nargs="?", help="pause, remove-trigger: the job (e.g. claude-quota)")
 parser.add_argument("--runtime", type=Path, default=Path.home() / "opt" / "agent-usage-tracker")
 parser.add_argument("--peer", help="cat1-shared: the other machine (ssh alias)")
 parser.add_argument("--shared", type=Path, help="cat1-machine, cat1-seed-vm: the file cat1-shared wrote")
@@ -259,5 +273,73 @@ def cat1_seed_vm() -> None:
         sys.exit(f"{missing} readings missing after the copy")
 
 
+def remove_trigger() -> None:
+    label = f"com.jeanlescut.agent-usage-tracker.{args.job}"
+    l_files = [args.runtime / f"{args.job}.sh"]
+    if sys.platform == "darwin":
+        link = Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", str(link)], capture_output=True)
+        l_files += [link, args.runtime / f"{label}.plist"]
+    else:
+        units = Path.home() / ".config" / "systemd" / "user"
+        subprocess.run(["systemctl", "--user", "disable", "--now", f"{label}.timer", f"{label}.service"], capture_output=True)
+        l_files += [units / f"{label}.timer", units / f"{label}.service", args.runtime / f"{label}.timer", args.runtime / f"{label}.service"]
+    l_removed = [str(f) for f in l_files if f.is_symlink() or f.exists()]
+    for f in l_files:
+        if f.is_symlink() or f.exists():
+            f.unlink()
+    if sys.platform != "darwin":
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        # Else systemd keeps listing the removed timer as "failed (not-found)".
+        subprocess.run(["systemctl", "--user", "reset-failed", f"{label}.timer", f"{label}.service"], capture_output=True)
+    say(f"{label}: unloaded; removed {l_removed or 'nothing (already gone)'}")
+
+
+def check_intermediary() -> None:
+    me = usage_db.machine_name()
+    inter = open_rw(usage_db.intermediary_dir("claude") / "requests.db")
+    inter.execute("PRAGMA query_only = ON")
+    d_new = {r[0]: r[1:] for r in inter.execute(
+        "SELECT request_id, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens FROM requests")}
+    sessions = usage_db.db_path("claude", "sessions_usages")
+    old = open_rw(sessions)
+    old.execute("PRAGMA query_only = ON")
+    l_old = old.execute("SELECT request_id, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, "
+                        "cache_write_1h_tokens, dt FROM requests").fetchall()
+    l_missing = [r for r in l_old if r[0] not in d_new]
+    l_diff = [r for r in l_old if r[0] in d_new and tuple(r[1:6]) != tuple(d_new[r[0]])]
+    say(f"old requests {len(l_old)}, in intermediary {len(d_new)}; missing {len(l_missing)}, different {len(l_diff)}"
+        + (f"; e.g. missing {[(r[0], r[6]) for r in l_missing[:3]]}" if l_missing else "")
+        + (f"; e.g. different {l_diff[:2]}" if l_diff else ""))
+    # The slots written so far against a separate count of the same requests.
+    agg = open_rw(usage_db.db_path("claude", "aggregates"))
+    agg.execute("PRAGMA query_only = ON")
+    end = agg.execute("SELECT COALESCE(MAX(ts) + 300, 0) FROM slots WHERE machine = ?", (me,)).fetchone()[0]
+    slots = agg.execute("SELECT COUNT(*), SUM(requests), SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens "
+                        "+ cache_write_1h_tokens + cache_write_unknown_tokens), ROUND(COALESCE(SUM(usd), 0), 6), "
+                        "SUM(tokens_without_usd) FROM slots WHERE machine = ?", (me,)).fetchone()
+    d_cost = {}
+    for request_id, cost, tokens, ts in old.execute(
+            "SELECT request_id, cost_usd, COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) + COALESCE(cache_read_tokens, 0) "
+            "+ COALESCE(cache_creation_tokens, 0), ts FROM telemetry_requests"):
+        d_cost[request_id] = (cost, tokens, ts)
+    n = tokens = usd = without = 0
+    for request_id, ts, t in inter.execute("SELECT request_id, ts, input_tokens + output_tokens + cache_read_tokens + "
+                                           "cache_write_5m_tokens + cache_write_1h_tokens FROM requests WHERE ts < ?", (end,)):
+        cost = d_cost.get(request_id, (None,))[0]
+        n, tokens = n + 1, tokens + t
+        usd, without = (usd + cost, without) if cost is not None else (usd, without + t)
+    for request_id, (cost, t, ts) in d_cost.items():
+        if request_id not in d_new and ts < end:
+            n, tokens = n + 1, tokens + t
+            usd, without = (usd + cost, without) if cost is not None else (usd, without + t)
+    counted = (n, tokens, round(usd, 6), without)
+    say(f"slots through {usage_db.iso(end)}: {slots[0]} rows; requests, tokens, usd, tokens without usd: "
+        f"slots {tuple(slots[1:])}, counted {counted}")
+    if l_missing or l_diff or tuple(slots[1:]) != counted:
+        sys.exit("check-intermediary: differences, see above")
+
+
 {"backup": backup, "pause": pause, "cat1-shared": cat1_shared, "sync-init": sync_init,
- "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm}[args.step]()
+ "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm,
+ "remove-trigger": remove_trigger, "check-intermediary": check_intermediary}[args.step]()
