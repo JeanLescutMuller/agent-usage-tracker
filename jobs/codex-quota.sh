@@ -8,4 +8,4 @@
 #   - timeout 1 min; two readings at once are harmless: no claim
 . ~/opt/job-runner/lib.sh
 jr_execute 1 python3 src/codex_quota_api_poller.py
-[ $JR_RC = 10 ] && jr_write_status SKIP "$JR_LAST_LINE"
+[ $JR_RC != 10 ] || jr_write_status SKIP "$JR_LAST_LINE"   # (|| : the check exits 0 either way)
