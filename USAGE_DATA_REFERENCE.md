@@ -401,7 +401,7 @@ One row per final 5-minute slot × machine × folder × entrypoint × model, sin
 | Column | Meaning |
 |---|---|
 | `ts`, `dt` | Slot start, a multiple of 300 s; a request belongs to the slot of its first transcript line, a telemetry-only request to the slot of its event |
-| `machine` | Where the requests ran: `usage_db.machine_name()`, the rule "Machine name" in `~/AGENTS.md` |
+| `machine` | Where the requests ran: `usage_db.machine_name()`, the skill `machine-name` |
 | `folder`, `entrypoint`, `model` | The session's `cwd`, `entrypoint` (`cli` = interactive terminal; `sdk-cli` = `claude -p`; `sdk-py` = Agent SDK; …), `message.model`; `''` when unknown |
 | `requests` | Requests counted once each |
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_5m_tokens`, `cache_write_1h_tokens` | Sums over the transcript requests, each from its line with the **largest** `output_tokens` (a streamed reply repeats the request over several lines with growing output) |
@@ -425,7 +425,7 @@ Until 2026-10-10 the Claude requests were a `requests` table in `sessions_usages
 └── _archive/<machine>-push-era/                         every row each machine pushed until 2026-10-10 21:48 UTC, untouched
 ```
 
-Since 2026-10-10 (migration phase 3, `design/TARGET_SPEC.md` §6.4) only Category 3 crosses: the Mac's `aggregates` job sends its new final slots (`push_to_central.py`), and `receive_from_machine.py` stores them through the gate `ingest_aggregates.py` in the Mac's own folder, named by the rule "Machine name" in `~/AGENTS.md`. The VM's own slots stay in its `data/claude/aggregates.db`. Quota readings (Category 1) go by their own 2-min sync into each machine's `data/claude/account_quotas.db`; a machine's raw rows (Category 2) never leave it.
+Since 2026-10-10 (migration phase 3, `design/TARGET_SPEC.md` §6.4) only Category 3 crosses: the Mac's `aggregates` job sends its new final slots (`push_to_central.py`), and `receive_from_machine.py` stores them through the gate `ingest_aggregates.py` in the Mac's own folder, named by the skill `machine-name`. The VM's own slots stay in its `data/claude/aggregates.db`. Quota readings (Category 1) go by their own 2-min sync into each machine's `data/claude/account_quotas.db`; a machine's raw rows (Category 2) never leave it.
 
 | Property | Detail |
 |---|---|

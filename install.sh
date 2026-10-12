@@ -38,7 +38,7 @@ source "$SCRIPT_DIR/utils.sh"
 
 command -v python3 >/dev/null 2>&1 || { echo "python3 not found on PATH"; exit 1; }
 PYTHON3="$(command -v python3)"
-# This machine's name, by usage_db.machine_name() (the rule in ~/AGENTS.md): written into the
+# This machine's name, by usage_db.machine_name() (skill machine-name): written into the
 # statusline's entry point, so a render needs no scutil call.
 MACHINE="$("$PYTHON3" -c "import sys; sys.path.insert(0, '$SCRIPT_DIR/src'); import usage_db; print(usage_db.machine_name())")" \
     || { echo "no machine name: macOS sudo scutil --set HostName <name>; Linux sudo hostnamectl set-hostname <name>" >&2; exit 1; }

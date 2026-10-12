@@ -355,7 +355,7 @@ def iso(ts: int) -> str:
 
 
 def machine_name() -> str:
-    """This machine's name: "Machine name" in ~/AGENTS.md (copy it identically)."""
+    """This machine's name: skill "machine-name" (copy it identically)."""
     # Imports here, not at the top: the statusline path never needs them.
     import subprocess
     import sys

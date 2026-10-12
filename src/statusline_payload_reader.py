@@ -89,7 +89,7 @@ def text(value):
     return None if value is None or value == "" else str(value)
 
 
-# This machine's name, written here by install.sh (rule "Machine name" in ~/AGENTS.md):
+# This machine's name, written here by install.sh (skill machine-name):
 # usage_db.machine_name() honours JR_MACHINE_NAME first, so a render needs no scutil call (~13 ms).
 MACHINE_NAME = "__MACHINE_NAME__"
 
