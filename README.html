@@ -306,7 +306,7 @@
       <div class="flow">
         <div class="node vendor">Claude Code sends telemetry</div><span class="arr">→</span><div class="node tracker">telemetry_receiver.py</div><span class="arr">→<i>tokens + Claude Code's $ per request</i>→</span><div class="node db k2">claude/sessions_usages.db<small>telemetry</small></div>
       </div>
-      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<code>TODO.md</code>).</p>
+      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<code>TODO/0004</code>).</p>
     </div>
     <div class="lane jl-agg"><div class="tag">job aggregates · every 5 min · Category 3</div>
       <div class="flow">
@@ -447,8 +447,8 @@
       <tr><th>Component</th><th>Status</th><th>Note</th></tr>
       <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
       <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
-      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; the VM taking over while the Mac sleeps is not observed yet (<code>TODO.md</code>)</td></tr>
-      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO.md</code>)</td></tr>
+      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; the VM taking over while the Mac sleeps is not observed yet (<code>TODO/0002</code>)</td></tr>
+      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO/0004</code>)</td></tr>
       <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
       <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>central/chan-lescut-macbook-pro/</code></td></tr>
       <tr><td>readers: agent-statusline, auto-apply</td><td><span class="badge b-live">LIVE</span></td><td>the printed line; the view <code>latest</code></td></tr>
@@ -466,7 +466,7 @@
 ├── FOR_READERS.md                  how other projects read the data
 ├── USAGE_DATA_SOURCES.md           what exists upstream
 ├── USAGE_DATA_REFERENCE.md         what is captured, where
-├── TODO.md                         what is left open
+├── TODO/                           what is left open, one file per task
 ├── design/                         TARGET_SPEC, MIGRATION_PLAN,
 │                                   OPEN_QUESTIONS, CODEX_DESIGN
 ├── src/                            gates, collectors, usage_db.py
@@ -524,7 +524,7 @@ bash tests/run.sh    # hermetic</pre>
     <p class="note">Split out of <code>agent-statusline</code> on 2026-09-30: its git history up to <code>d744951</code> holds this code from 2026-08-31; older history (the original <code>agent-quota-tracker</code>) is below this repo's first commit.</p>
   </div>
 
-  <footer>Rules: <code>AGENTS.md</code> · open items: <code>TODO.md</code> · readers: <code>FOR_READERS.md</code> · design: <code>design/TARGET_SPEC.md</code>. This page shows entities only.</footer>
+  <footer>Rules: <code>AGENTS.md</code> · open items: <code>TODO/</code> · readers: <code>FOR_READERS.md</code> · design: <code>design/TARGET_SPEC.md</code>. This page shows entities only.</footer>
 </main>
 </body>
 </html>

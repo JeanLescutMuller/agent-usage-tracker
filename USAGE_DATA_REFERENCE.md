@@ -283,7 +283,7 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 
 The Claude poller borrows each machine's Claude Code login, whose access token lasts 8 h and is renewed only by Claude Code itself (`USAGE_DATA_SOURCES.md` §3.5). If Claude Code runs on neither the Mac nor the VM for more than 8 h (several days away, say), both pollers get 401 and **no Claude reading is stored until Claude Code runs again on one of them**; after the refresh token expires too (weeks), only a new login helps. What this loses: usage made meanwhile elsewhere (claude.ai, the phone, cloud sessions) still shows up in the first reading afterwards, as a total, but *when* it happened is lost. Readers must treat such a stretch as "unknown", not as "unchanged". The maximizer's own Claude runs on the VM renew the VM's token as a side effect.
 
-**Decision (the user, 2026-10-10): accept the gap.** Rejected: a keepalive message every few hours, because any message opens a 5-hour window at an arbitrary time (`USAGE_DATA_SOURCES.md` §5.2). Not tried yet: whether a Claude Code command that sends no message (e.g. `claude auth status`) renews an expired token; if it does, a keepalive job without that drawback becomes possible (`TODO.md`).
+**Decision (the user, 2026-10-10): accept the gap.** Rejected: a keepalive message every few hours, because any message opens a 5-hour window at an arbitrary time (`USAGE_DATA_SOURCES.md` §5.2). Not tried yet: whether a Claude Code command that sends no message (e.g. `claude auth status`) renews an expired token; if it does, a keepalive job without that drawback becomes possible (`TODO/0010`).
 
 ## 6. Change history
 
@@ -332,7 +332,7 @@ From Sources §2, the data that exists nowhere else and that we do not record ye
 | Codex usage per day × model × client, relative | Backend analytics (Sources §4.4) | The only per-client split; relative only |
 | Claude quota status beyond the percent (`status`, `representative-claim`, overage) | `/v1/messages` headers (Sources §3.6) | Only reachable through a billed request of our own |
 
-Deliberately not captured because it already persists elsewhere: Codex per-turn and per-session tokens and quota (session files; to be read like Claude's transcripts, `TODO.md` step 7). Claude's per-request tokens and spend are captured since 2026-10-08 (§10), because the execution folder and the interactive flag are needed per 5-minute slot.
+Deliberately not captured because it already persists elsewhere: Codex per-turn and per-session tokens and quota (session files; to be read like Claude's transcripts, `TODO/0007`). Claude's per-request tokens and spend are captured since 2026-10-08 (§10), because the execution folder and the interactive flag are needed per 5-minute slot.
 
 ---
 

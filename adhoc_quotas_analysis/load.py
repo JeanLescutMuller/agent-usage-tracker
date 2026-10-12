@@ -135,7 +135,7 @@ def project(folder: str) -> str:
 
 
 def kind(folder: str, entrypoint: str) -> str:
-    """The kind of use (TODO.md, "Usage per project and per kind of use"): `cli` = development (interactive);
+    """The kind of use (as Jean asked on 2026-10-07, `TODO/0005`): `cli` = development (interactive);
     `sdk-*` (claude -p, the Agent SDK) under ~/opt/ = scheduled run, elsewhere = test run; no entrypoint = "?"."""
     if not entrypoint:
         return "?"

@@ -260,8 +260,7 @@ CREATE TABLE scans (                 -- one row per transcript_reader.py run
 # Codex subscription; this is the price ccusage 20.0.26 applies, which
 # reproduces its monthly totals exactly (fitted 2026-10-08). Other Codex
 # models have no verified price: their usd stays NULL.
-# adhoc_quotas_analysis/CONCLUSIONS.md uses $5/$30 for gpt-5.6-sol instead;
-# see TODO.md.
+# adhoc_quotas_analysis/CONCLUSIONS.md (§4, frozen) used $5/$30 for gpt-5.6-sol instead.
 PRICES = {
     "gpt-5.6-sol": (4, 20, .1),
 }

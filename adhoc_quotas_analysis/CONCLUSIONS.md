@@ -30,7 +30,7 @@ Evidence for the 5-hour rule, 72 windows from 08-22 to 10-11:
 
 Exceptions, each one a finding:
 
-- **5 windows opened with no activity in the slots**: 09-25 17:10, 22:30, 09-26 03:50, **10-09 04:30** and **10-10 01:00** (first activity 30–370 min later). Something else used the account: the VM, whose transcripts nothing reads yet (`TODO.md` item 6), or claude.ai.
+- **5 windows opened with no activity in the slots** of either machine (run on the VM, which holds both): 09-25 17:10, 22:30, 09-26 03:50, **10-09 04:30** and **10-10 01:00** (first activity 30–370 min later). Something outside Claude Code's transcripts used the account: claude.ai, the apps, cloud sessions (`../FOR_READERS.md` rule 6).
 - **One hole in the readings**, 08-23 01:40 → 08-24 14:20: 44 active slots, no reading, so the windows of that day are missing.
 - **The plan change** (10-07 16:51) put both meters to 0%: a new 5-hour window, and a 7-day window that kept its Monday 10-12 19:00 end.
 
@@ -64,7 +64,7 @@ The Max 5x week so far (10-07 16:51 → 10-12 19:00, peak 40%, $600.80):
 | `~/dev`, `~` (sessions started outside a repo) | 89.10 | 14.8% |
 | 11 others | 99.43 | 16.5% |
 
-By kind of use, since the first window: development (interactive) $902.51; test runs $0.25 and scheduled runs $0.00. Test and scheduled runs send no telemetry, so their tokens have no $ (2.0 M and 0.3 M tokens, `TODO.md` item 5).
+By kind of use, since the first window: development (interactive) $902.51; test runs $0.25 and scheduled runs $0.00. Test and scheduled runs send no telemetry, so their tokens have no $ (2.0 M and 0.3 M tokens, `TODO/0004`).
 
 ## 4. Frozen findings (Pro and Codex, 2026-08/09)
 
@@ -83,7 +83,7 @@ Neither provider reports a $ for a subscription quota (Claude's `*_dollars` fiel
 
 ## 5. Limits
 
-- **The slots hold the Mac only.** The VM's sessions are invisible to them, so a window it fills shows a low `B`, and its opening shows as an exception in §1.
+- **Each machine's slots stay on it, except the Mac's, which the VM also holds**: run on the Mac, the scripts see the Mac's usage only; run on the VM, both. The VM's Claude use was small (41 slots, the last on 10-08), so the numbers here, from the Mac, barely change.
 - **A $ exists only where Claude Code sent telemetry**: none before 2026-09-30, and none for Agent SDK sessions or sessions started before telemetry was turned on. `B` is fitted only where at most 5% of a window's tokens lack one.
 - **Resolution**: the percent moves in 1% steps, 5-hour ends snap to 10 min, and a slot is 5 min (its $ counts at its middle).
 - **Small samples on Max 5x**: 4 windows at 30% or more, and no full week yet.

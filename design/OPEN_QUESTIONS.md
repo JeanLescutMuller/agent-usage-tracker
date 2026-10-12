@@ -10,9 +10,9 @@ Status 2026-10-10: **everything here is settled.** The decisions became `design/
 | C4 | Is telemetry late enough to break "final" slots? | measured: 8,089 of 8,090 events within 60 s, none after 15 min; no change needed |
 | C5 | Category 4 rebuilt every 5 min | moot: Category 4 belongs to a reader (`FOR_READERS.md`) |
 | C6 | Migrate `requests`, or rebuild them from the transcripts? | rebuilt in `intermediary/` (phase 2): every old request found again with the same tokens; the old table dropped in phase 5 |
-| C7 | auto-apply's Agent SDK sessions send no telemetry | open: `TODO.md` item 5 |
+| C7 | auto-apply's Agent SDK sessions send no telemetry | open: `TODO/0004` |
 | C8 | Codex rows stop reaching the VM | accepted (`design/CODEX_DESIGN.md`); true since phase 3 |
-| C9 | Who runs the transcript reader on the VM | parked: `TODO.md` item 6 |
+| C9 | Who runs the transcript reader on the VM | settled by the design: the VM runs its own `aggregates` job (P12); its slots stay on the VM |
 | C10 | Machine names could drift | settled by the rule "Machine name" in `~/AGENTS.md` (commit `f71f282`) |
 | C11 | Poll thresholds | Mac 110 / 300 s, VM 290 / 480 s (P4), live since phase 1 |
 | C12 | `TODO.md`'s target-design table outdated | rewritten in phase 5 |
