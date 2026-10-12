@@ -4,7 +4,7 @@ The answers to the three questions of `README.md`, Claude only. Two kinds, never
 
 | Kind | Where from | Re-run |
 |---|---|---|
-| **Re-measured** (§1–§3) | the scripts here, on the readings (Category 1) and the `slots` (Category 3); `$` = Claude Code's own | any time; the numbers below are from the run of **2026-10-10 22:30 UTC** |
+| **Re-measured** (§1–§3) | the scripts here, on the readings (Category 1) and the `slots` (Category 3); `$` = Claude Code's own | any time; §1 and §3: the run of **2026-10-10 22:30 UTC** (Mac); §2: the run of **2026-10-12 18:59 UTC** on the VM (both machines' slots), the end of the first full Max 5x week |
 | **Frozen** (§4) | the scripts retired on 2026-10-11, on 2026-08-24 → 09-21 data; their `$` = tokens × list price, computed by the script, which this folder no longer does | not here: `git show 12956dc:adhoc_quotas_analysis/CONCLUSIONS.md` has the full evidence |
 
 Plans (`load.PLANS`): **pro+promo** until 2026-09-01 06:59 UTC (Anthropic's +50% weekly promo), **pro** until 2026-10-07 16:51 UTC, **max5x** since. A percent of one plan is never compared with another's.
@@ -42,12 +42,14 @@ Exceptions, each one a finding:
 |---|---|---|---|---|
 | pro+promo | — | — | — | 9.86 (9.81), 15 windows |
 | pro | **$47.29** [$33.05–50.74], 6 windows (10-05 → 10-07) | $0.47 | $357 (one week, cut at 60% by the plan change) | **7.83** (8.46), 30 windows |
-| max5x | **$202.21** [$179.47–211.14], 4 windows | **$2.02** | $1,473 (the week running, at 40%) | 7.50 (5.79), 7 windows |
+| max5x | **$194.17** [$179.47–202.21], 7 windows | **$1.94** | $1,469 (the first full week, 10-07 16:51 → 10-12 19:00, at 69%) | 6.50 (4.16), 8 windows |
 
-- **Max 5x holds about 4.3× Pro, not 5×**, in Claude Code's $: 4.3× on the 5-hour B, 4.1× on the 7-day B. Early: 4 Max windows have reached 30%.
-- **Within a window, the % follows the $ closely**: R² ≥ 0.95 in 9 of the 10 summarised windows.
-- **1% of a Max 5x 5-hour window, at the average mix**: 5.4 M cache-read tokens, 58 K cache-write, 18 K output and 3 K input tokens. Cache reads are 98% of all tokens.
-- **The 7-day meter jumped twice**, faster than any 5-hour use explains: on 09-14 from 20% to 27% in 13 min, and on 10-08 from 7% to 18% in 9 min. The second one alone takes the Max "all gains summed" figure from about 7.5 to 5.79.
+- **Max 5x holds about 4.1× Pro, not 5×**, in Claude Code's $, on both meters: 5-hour B $194.17 / $47.29 = 4.11, 7-day B $1,469 / $357 = 4.11 (first measure on 2026-10-11, from 4 windows: 4.3×).
+- **A week holds about 7.6 full 5-hour windows of $ on both plans**: 7-day B / 5-hour B = $1,469 / $194.17 = 7.57 on Max 5x, $357 / $47.29 = 7.55 on Pro (Pro's 7-day B is fitted on a week cut at 60%).
+- **Within a window, the % follows the $ closely**: R² ≥ 0.95 in 9 of the 13 summarised windows, ≥ 0.88 in 12; one bad fit (max5x 10-12 08:10, R² −0.31, B $198 all the same).
+- **One outlier: max5x 10-12 13:10 → B $134** (85% for $125): 1% cost about 30% fewer $ than in the other Max windows. Use outside Claude Code's transcripts in that window (claude.ai, the apps, cloud sessions, as in §1) would do this; not explained yet.
+- **1% of a Max 5x 5-hour window, at the average mix**: 5.1 M cache-read tokens, 71 K cache-write, 18 K output and 18 K input tokens. Cache reads are 98% of all tokens.
+- **The 7-day meter jumped twice**, faster than any 5-hour use explains: on 09-14 from 20% to 27% in 13 min, and on 10-08 from 7% to 18% in 9 min. With 10-10 12:10 (5-hour +74 for 7-day +30), they keep Max's "all gains summed" figure low (4.16, median 6.50); the B ratio above (7.57) does not depend on them.
 - **Pro's 5-hour windows per week**: the frozen 8.85 (09-13 → 09-21) is 7.83 as a median, 8.46 summed, over the 30 windows from 09-01 to 10-07.
 - **$32 (frozen, §4) and $47 (here) are not comparable.** The $32 is tokens × list price for Sonnet 5 and Opus 5 in 08/09. The $47 is Claude Code's own $, mostly Opus 5.5, in 10.
 
@@ -86,4 +88,4 @@ Neither provider reports a $ for a subscription quota (Claude's `*_dollars` fiel
 - **Each machine's slots stay on it, except the Mac's, which the VM also holds**: run on the Mac, the scripts see the Mac's usage only; run on the VM, both. The VM's Claude use was small (41 slots, the last on 10-08), so the numbers here, from the Mac, barely change.
 - **A $ exists only where Claude Code sent telemetry**: none before 2026-09-30, and none for Agent SDK sessions or sessions started before telemetry was turned on. `B` is fitted only where at most 5% of a window's tokens lack one.
 - **Resolution**: the percent moves in 1% steps, 5-hour ends snap to 10 min, and a slot is 5 min (its $ counts at its middle).
-- **Small samples on Max 5x**: 4 windows at 30% or more, and no full week yet.
+- **Small samples on Max 5x**: 7 windows at 30% or more, and one full week.

@@ -11,7 +11,7 @@ autonomy: auto_mode
 priority: 7 days
 estimated_work_duration: 20 min
 # ── When
-not_before: 2026-10-13[Europe/Zurich]
+not_before: 2026-10-19T21:05+02:00[Europe/Zurich]
 planned_at: 2026-10-20[Europe/Zurich]
 not_after: 
 # ── Status and claim
@@ -36,9 +36,20 @@ The plan changed from Pro to Max 5x on 2026-10-07 about 16:51Z. First measure, 2
 - Optional: the token-type weights (on Pro, cache reads counted 4–5× less than list price) re-measured with a fit per token column.
 
 ## History
+- 2026-10-12: first full Max 5x week measured (claude): 4.1×, 7 windows at 30% of the 10 asked; kept open for the second week (ends 2026-10-19 19:00 UTC) and the 10-12 13:10 outlier; see Result
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
 - `adhoc_quotas_analysis/budgets.py`, `adhoc_quotas_analysis/CONCLUSIONS.md` §2
 
 ## Result
+
+2026-10-12 18:59 UTC, `budgets.py` on the VM (both machines' slots), the first full Max 5x week (10-07 16:51 → 10-12 19:00):
+
+| | Pro | Max 5x | Max / Pro |
+|---|---|---|---|
+| 5-hour B, median [p10–p90] | $47.29 [33.05–50.74], n=6 | $194.17 [179.47–202.21], n=7 | 4.11 |
+| 7-day B | $357 (week cut at 60%) | $1,469 (week at 69%) | 4.11 |
+| 7-day B / 5-hour B | 7.55 | 7.57 | — |
+
+Not done yet: 7 windows reached 30%, not 10. To check next time: the outlier 10-12 13:10 (B $134), and the token-type weights. Recorded in `adhoc_quotas_analysis/CONCLUSIONS.md` §2.
