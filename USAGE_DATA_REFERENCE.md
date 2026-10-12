@@ -398,7 +398,7 @@ Attribution attributes include the account's `user.email`; the file stays local,
 
 ## 10. Category 3: `slots` in `data/claude/aggregates/<machine>.db`, and the requests behind it
 
-One row per final 5-minute slot × machine × folder × entrypoint × model, since 2026-10-10, rebuilt then from every transcript (back to 2026-07-30). Written once, when final, by the job `aggregates` (`src/aggregate_slots.py` through the gate `src/ingest_aggregates.py`), never changed; the Mac's are also in the VM's `central/chan-lescut-macbook-pro/` (§11). How it is built: `design/DESIGN.md` §6.
+One row per final 5-minute slot × machine × folder × entrypoint × model, since 2026-10-10, rebuilt then from every transcript (back to 2026-07-30). Written once, when final, by the job `aggregates` (`src/aggregate_slots.py` through the gate `src/ingest_aggregates.py`), never changed; the Mac's are also in the VM's `data/claude/aggregates/chan-lescut-macbook-pro.db` (§11). How it is built: `design/DESIGN.md` §6.
 
 | Column | Meaning |
 |---|---|

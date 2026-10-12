@@ -10,8 +10,8 @@ agent-usage-tracker/
 ├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, where
 ├── FOR_READERS.md                # how other projects read the data
-├── README.md                     # stub
-├── design/                       # DESIGN.md (agents) + DESIGN.html (Jean): one design
+├── README.html (+ .md stub)      # the design, for Jean
+├── design/DESIGN.md              # the same design, for agents
 ├── TODO/                         # open work, one file per task
 ├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
 │   ├── usage_db.py               # paths, schemas, connect(), Codex price table
@@ -22,7 +22,7 @@ agent-usage-tracker/
 │   ├── claude_quota_api_poller.py    # job claude-quota: the sync (Mac), then a poll if no reading is fresh
 │   ├── codex_*_poller.py, telemetry_receiver.py  # Codex pollers; the local OTLP receiver (a service)
 │   ├── transcript_reader.py + aggregate_slots.py # job aggregates: transcripts -> intermediary.db -> final 5-min slots
-│   ├── push_to_central.py / receive_from_machine.py  # the Mac's slots -> the VM's central/<machine>/
+│   ├── push_to_central.py / receive_from_machine.py  # the Mac's slots -> the VM
 │   ├── merge_claude_env.py       # run from the repo: telemetry keys in ~/.claude/settings.json
 │   └── launchd/, systemd/        # trigger templates (Mac, VM)
 ├── jobs/                         # job-runner entrypoints: claude-quota, aggregates, codex-quota, codex-plan-history (Mac)
@@ -40,7 +40,7 @@ agent-usage-tracker/
 - **Keep the contract with agent-statusline small**: the reader's path, its six-field line and the heartbeat path are shared; auto-apply reads `latest`. Changing one is a change in every repo. Nothing here runs agent-statusline code.
 - **Readers open with `PRAGMA query_only = ON`**, never a `mode=ro` URI; new rows by `rowid` (`FOR_READERS.md`).
 - **Every change to what is captured** gets a dated row in `USAGE_DATA_REFERENCE.md` §6 and its "Last verified" line.
-- **`design/DESIGN.md` and `DESIGN.html` change together**, section by section.
+- **`design/DESIGN.md` and `README.html` change together.**
 
 ## Vocabulary
 

@@ -15,7 +15,7 @@ not_before: 2026-10-11T09:00+02:00[Europe/Zurich]
 planned_at: 2026-10-11[Europe/Zurich]
 not_after: 
 # ── Status and claim
-status: todo
+status: done
 claimed_since:
 claimed_by:
 # ── Links
@@ -35,9 +35,21 @@ Since the 2-min sync (2026-10-10), the VM's `claude-quota` job polls only when n
 - The result is written below.
 
 ## History
+- 2026-10-12: done (claude): the VM takes over as designed, but its polls fail (401: its login token expired); see Result
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
 - `jobs/claude-quota.sh`, `src/claude_quota_api_poller.py`
 
 ## Result
+
+Checked 2026-10-12 on the VM's `account_quotas.db` and `poll_errors`, since 2026-10-10 22:00 UTC (the sync live):
+
+| | Value |
+|---|---|
+| Mac readings | 4,527; the Mac was silent more than 10 min only twice: 10-11 08:05 → 08:23 and 08:23 → 08:37 |
+| VM polls while the Mac was awake | 0 (as designed) |
+| VM polls during those silences | it **tried**: 08:15 and 08:16 → **401 Unauthorized**, 08:18 → 429, Retry-After 3,600 s; also 10-10 23:25–23:27 → 401 |
+| VM readings stored | 0 |
+
+The takeover logic works: the VM polled about 10 min after the Mac's last reading. But the VM's login token has expired: only Claude Code renews it, and Claude Code last ran on the VM on 2026-10-08 (its last slot). So while the Mac sleeps, no reading is taken at all: the gap accepted on 2026-10-10 (`USAGE_DATA_REFERENCE.md` §5.8). It closes only if something renews the VM's token without sending a message: `TODO/0010`.

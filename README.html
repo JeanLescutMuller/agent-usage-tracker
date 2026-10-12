@@ -1,10 +1,10 @@
 <!doctype html>
-<!-- agent-usage-tracker's design, drawn: the same 13 sections as design/DESIGN.md, which changes with it. One self-contained file; opens with a double-click. Becomes the README once everything is implemented. -->
+<!-- agent-usage-tracker's README: its design, drawn - the same 13 sections as design/DESIGN.md, which changes with it. One self-contained file; opens with a double-click. README.md is a stub pointing here. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Agent Usage Tracker Design</title>
+<title>Agent Usage Tracker</title>
 <style>
   :root {
     --bg: #fafaf8; --fg: #1d1d1f; --muted: #6b6b70; --card: #ffffff; --line: #d8d8dc; --soft: #f1f1ee;
@@ -122,13 +122,13 @@
 </head>
 <body>
 <main>
-  <h1>agent-usage-tracker · design</h1>
+  <h1>agent-usage-tracker</h1>
   <p class="lead">Records Claude Code usage over time - quota percent, tokens, Claude Code's own $ - on the MacBook and the VM <code>H-Frank-1</code>, in four categories of data. Claude only; Codex keeps its own jobs (section 13).</p>
   <div class="card" style="margin-top: 14px">
     <table class="tl">
       <tr><td>Status</td><td><b>built</b> 2026-10-10 (5 migration phases, each a dated row in <code>USAGE_DATA_REFERENCE.md</code> §6); decisions P1–P12 validated by Jean on 2026-10-10 (section 11); this page validated by Jean on 2026-10-12</td></tr>
       <tr><td>Changed 2026-10-12</td><td>P13 <code>data/claude/intermediary.db</code> replaces <code>intermediary/claude/</code>; P14 one aggregates file per machine in <code>data/claude/aggregates/</code>, replacing <code>central/</code> (section 11); built the same day, 18:45 UTC (<code>migrate_to_target.py data-layout</code>)</td></tr>
-      <tr><td>Two files, one design</td><td><code>design/DESIGN.html</code> (this page, for Jean) and <code>design/DESIGN.md</code> (the same sections, for agents). <b>They change together, section by section.</b> Once everything is implemented, this page becomes the README</td></tr>
+      <tr><td>Two files, one design</td><td><code>README.html</code> (this page, for Jean; the README since 2026-10-12) and <code>design/DESIGN.md</code> (the same sections, for agents). <b>They change together, section by section.</b></td></tr>
       <tr><td>Words</td><td>the <code>## Vocabulary</code> table of <code>AGENTS.md</code></td></tr>
       <tr><td>History</td><td>the migration plan and the record of the open questions: <code>git show 1ced0c4:design/MIGRATION_PLAN.md</code>, <code>git show 1ced0c4:design/OPEN_QUESTIONS.md</code></td></tr>
       <tr><td>Open work</td><td><code>TODO/</code>, one file per task</td></tr>
@@ -302,12 +302,12 @@
   </div>
   <div class="card">
 <pre>~/dev/agent-usage-tracker/          the repo (development: Mac only)
-├── README.md                       a stub, pointing here until the README takes this page over
+├── README.html, README.md          this page; its stub
 ├── AGENTS.md                       rules for working on it, the vocabulary
 ├── FOR_READERS.md                  how other projects read the data
 ├── USAGE_DATA_SOURCES.md           what exists upstream
 ├── USAGE_DATA_REFERENCE.md         what is captured, where; §6 change history
-├── design/                         DESIGN.html (this page), DESIGN.md
+├── design/                         DESIGN.md (this page's sections, for agents)
 ├── TODO/                           open work, one file per task; done/
 ├── src/                            gates, collectors, usage_db.py;
 │                                   launchd/, systemd/ trigger templates
@@ -406,7 +406,7 @@ claude_quota_api_poller.py --sync-with=H-Frank-1
         <tr><th>Situation</th><th>Mac</th><th>VM</th></tr>
         <tr><td>a Claude session active anywhere</td><td>no</td><td>no</td></tr>
         <tr><td>everything idle, Mac awake</td><td><b>polls</b> (first)</td><td>no: gets the Mac's reading within 2 min</td></tr>
-        <tr><td>Mac asleep</td><td>—</td><td><b>polls</b></td></tr>
+        <tr><td>Mac asleep</td><td>—</td><td><b>polls</b>, if its login token is valid (renewed only by Claude Code running on the VM)</td></tr>
         <tr><td>VM's token expired (401)</td><td><b>polls</b></td><td>fails, harmless</td></tr>
         <tr><td>429 on one machine</td><td colspan="2">only that machine waits</td></tr>
       </table>
@@ -607,7 +607,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <tr><th>Component</th><th>Status</th><th>Note</th></tr>
       <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
       <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
-      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; the VM taking over while the Mac sleeps is not observed yet (<code>TODO/0002</code>)</td></tr>
+      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (<code>USAGE_DATA_REFERENCE.md</code> §5.8, <code>TODO/0010</code>)</td></tr>
       <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO/0004</code>)</td></tr>
       <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
       <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>data/claude/aggregates/chan-lescut-macbook-pro.db</code>, the same rows as the Mac's</td></tr>

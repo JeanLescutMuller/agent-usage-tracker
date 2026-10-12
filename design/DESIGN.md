@@ -5,7 +5,7 @@ Records Claude Code usage over time - quota percent, tokens, Claude Code's own $
 | | |
 |---|---|
 | Status | **built** 2026-10-10 (5 migration phases, each a dated row in `USAGE_DATA_REFERENCE.md` §6); decisions P1–P12 validated by Jean on 2026-10-10 (§11); the page validated by Jean on 2026-10-12 |
-| Two files, one design | `design/DESIGN.md` (this file, for agents) and `design/DESIGN.html` (the same sections, drawn, for Jean). **They change together, section by section.** Once everything is implemented, the page becomes the README |
+| Two files, one design | `design/DESIGN.md` (this file, for agents) and `README.html` (the same sections, drawn, for Jean; the README since 2026-10-12). **They change together, section by section.** |
 | Words | the `## Vocabulary` table of `AGENTS.md` |
 | History | the migration plan and the record of the open questions: `git show 1ced0c4:design/MIGRATION_PLAN.md`, `git show 1ced0c4:design/OPEN_QUESTIONS.md` |
 | Changed 2026-10-12 | P13 `data/claude/intermediary.db` replaces `intermediary/claude/`; P14 one `aggregates` file per machine in `data/claude/aggregates/`, replacing `central/` (§11); built the same day, 18:45 UTC (`migrate_to_target.py data-layout`) |
@@ -62,12 +62,12 @@ Data only flows 2 → 3 → 4 and 1 → 4. Only Categories 1 and 3 cross machine
 
 ```
 ~/dev/agent-usage-tracker/          the repo (development: Mac only)
-├── README.md                       a stub, pointing to design/DESIGN.html until the README takes it over
+├── README.html, README.md          the same design drawn, for Jean; its stub
 ├── AGENTS.md                       rules for working on it, the vocabulary
 ├── FOR_READERS.md                  how other projects read the data
 ├── USAGE_DATA_SOURCES.md           what exists upstream
 ├── USAGE_DATA_REFERENCE.md         what is captured, where, and its change history (§6)
-├── design/                         DESIGN.md (this file), DESIGN.html (the same, drawn)
+├── design/                         DESIGN.md (this file)
 ├── TODO/                           open work, one file per task; done/ for finished ones
 ├── src/                            gates, collectors, usage_db.py; launchd/, systemd/ trigger templates
 ├── jobs/                           job-runner entrypoints <job>.sh and their dashboard settings <job>.conf
@@ -148,7 +148,7 @@ Each `claude-quota` run (tick 60 s, both machines): the sync first (Mac, when du
 |---|---|---|
 | a Claude session active anywhere | no poll: statusline readings are fresh | no poll |
 | everything idle, Mac awake | **polls** | no: the Mac's reading arrives within 2 min |
-| Mac asleep | — | **polls** |
+| Mac asleep | — | **polls**, if its login token is valid (renewed only by Claude Code running on the VM) |
 | the VM's token expired (401) | polls | fails, harmless |
 | 429 on one machine | only that machine waits (its Retry-After) | |
 
@@ -289,7 +289,7 @@ aggregates.sh ─▶ 1 transcript_reader.py ─▶ intermediary.db           agg
 |---|---|---|
 | statusline reading + printed line (Mac, VM) | LIVE | about 24 ms per render |
 | Category 1 sync Mac ↔ VM | LIVE | both databases hold the same readings |
-| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; the VM taking over while the Mac sleeps is not observed yet (`TODO/0002`) |
+| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (`USAGE_DATA_REFERENCE.md` §5.8, `TODO/0010`) |
 | telemetry receiver `otel` | LIVE | auto-apply's Agent SDK sessions send none: their slots carry tokens without $ (`TODO/0004`) |
 | Category 3 `slots` (Mac, VM) | LIVE | history since 2026-07-30; `usd` since 2026-09-30 |
 | the Mac's slots on the VM | LIVE | `data/claude/aggregates/chan-lescut-macbook-pro.db`, the same rows as the Mac's |
