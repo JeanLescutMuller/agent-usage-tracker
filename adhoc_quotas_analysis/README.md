@@ -9,7 +9,7 @@ Research into what the Claude quota percent means, run by hand and never deploye
  (one per machine; the VM: both)                          └─► usage_split.py  Q3  where do the $ of a window go?
                                                                      │
                                                                      ▼
-                                                              CONCLUSIONS.md
+                                                              CONCLUSIONS.md (+ .html, drawn)
 
  transcripts + telemetry + ccusage ─► verify_token_costs.py   are the local tokens and $ exact?  (../USAGE_DATA_SOURCES.md §3.4)
  the runtime's databases ───────────► migrate_to_target.py    the hand-run migration steps of 2026-10 (git show 1ced0c4:design/MIGRATION_PLAN.md)
@@ -26,6 +26,7 @@ Research into what the Claude quota percent means, run by hand and never deploye
 | `verify_token_costs.py` | a check of the data sources: transcripts against telemetry and ccusage |
 | `migrate_to_target.py` | the migration steps to `../design/DESIGN.md`, all done; `check-intermediary` still checks the slots against their requests |
 | `CONCLUSIONS.md` | the answers: re-measured, and frozen (Pro and Codex, 2026-08/09) |
+| `CONCLUSIONS.html` | the same answers drawn, for Jean: open it in a browser |
 
 ## Words
 

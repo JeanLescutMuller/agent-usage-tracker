@@ -4,7 +4,7 @@ The answers to the three questions of `README.md`, Claude only. Two kinds, never
 
 | Kind | Where from | Re-run |
 |---|---|---|
-| **Re-measured** (§1–§3) | the scripts here, on the readings (Category 1) and the `slots` (Category 3); `$` = Claude Code's own | any time; §1 and §3: the run of **2026-10-10 22:30 UTC** (Mac); §2: the run of **2026-10-12 18:59 UTC** on the VM (both machines' slots), the end of the first full Max 5x week |
+| **Re-measured** (§1–§3) | the scripts here, on the readings (Category 1) and the `slots` (Category 3); `$` = Claude Code's own | any time; the numbers below are from the runs of **2026-10-12 19:00 UTC** on the VM (both machines' slots), the end of the first full Max 5x week |
 | **Frozen** (§4) | the scripts retired on 2026-10-11, on 2026-08-24 → 09-21 data; their `$` = tokens × list price, computed by the script, which this folder no longer does | not here: `git show 12956dc:adhoc_quotas_analysis/CONCLUSIONS.md` has the full evidence |
 
 Plans (`load.PLANS`): **pro+promo** until 2026-09-01 06:59 UTC (Anthropic's +50% weekly promo), **pro** until 2026-10-07 16:51 UTC, **max5x** since. A percent of one plan is never compared with another's.
@@ -19,18 +19,18 @@ Plans (`load.PLANS`): **pro+promo** until 2026-09-01 06:59 UTC (Anthropic's +50%
 | Idle time banked? | not applicable | no: in the week to 09-14, the first request came on 09-13 15:20, about 28 h before its end |
 | The other meter's reset | — | a 7-day reset leaves a running 5-hour window alone: same %, same end (08-24 53%, 08-31 96%, 10-05 100%) |
 
-Evidence for the 5-hour rule, 72 windows from 08-22 to 10-11:
+Evidence for the 5-hour rule, 78 windows from 08-22 to 10-12:
 
 | Measure | Value |
 |---|---|
-| Consecutive pairs (same plan) | 70: 15 back to back, 7 within 20 min (the 10-min rounding), **48 idle gaps**, 0 overlaps |
-| Idle gaps | median 9.2 h, max 213.8 h; 39 of 48 hold a server "no window" reading, 9 have no reading at all |
-| Time inside a 5-hour window | 30% (358 h of 1,190 h) |
+| Consecutive pairs (same plan) | 75: 18 back to back, 7 within 20 min (the 10-min rounding), **50 idle gaps**, 0 overlaps |
+| Idle gaps | median 8.8 h, max 213.8 h; 41 of 50 hold a server "no window" reading, 9 have no reading at all |
+| Time inside a 5-hour window | 31% (388 h of 1,234 h) |
 | First activity after a window's end | at the next window's start (0–15 min), except below |
 
 Exceptions, each one a finding:
 
-- **5 windows opened with no activity in the slots** of either machine (run on the VM, which holds both): 09-25 17:10, 22:30, 09-26 03:50, **10-09 04:30** and **10-10 01:00** (first activity 30–370 min later). Something outside Claude Code's transcripts used the account: claude.ai, the apps, cloud sessions (`../FOR_READERS.md` rule 6).
+- **7 windows opened with no activity in the slots** of either machine (run on the VM, which holds both): 09-25 17:10, 22:30, 09-26 03:50, **10-09 04:30**, **10-10 01:00**, **10-11 09:20** and **10-11 20:00** (first activity 30–370 min later). Something outside Claude Code's transcripts used the account: claude.ai, the apps, cloud sessions (`../FOR_READERS.md` rule 6).
 - **One hole in the readings**, 08-23 01:40 → 08-24 14:20: 44 active slots, no reading, so the windows of that day are missing.
 - **The plan change** (10-07 16:51) put both meters to 0%: a new 5-hour window, and a 7-day window that kept its Monday 10-12 19:00 end.
 
@@ -55,18 +55,27 @@ Exceptions, each one a finding:
 
 ## 3. Where do the $ go? (`usage_split.py`)
 
-The Max 5x week so far (10-07 16:51 → 10-12 19:00, peak 40%, $600.80):
+The first full Max 5x week (10-07 16:51 → 10-12 19:00, peak 69%, $1,021.88, 2,707 M tokens):
 
 | Project | $ | of $ |
 |---|---|---|
-| multi-host-orchestrator | 164.57 | 27.4% |
-| trading-bot | 89.40 | 14.9% |
-| agent-usage-tracker | 87.86 | 14.6% |
-| Bot_crypto_copytrade | 70.44 | 11.7% |
-| `~/dev`, `~` (sessions started outside a repo) | 89.10 | 14.8% |
-| 11 others | 99.43 | 16.5% |
+| `~` (sessions started in the home folder) | 334.44 | 32.7% |
+| trading-bot | 169.99 | 16.6% |
+| multi-host-orchestrator | 164.57 | 16.1% |
+| agent-usage-tracker | 112.53 | 11.0% |
+| Bot_crypto_copytrade | 70.44 | 6.9% |
+| `~/dev` (sessions started outside a repo) | 46.09 | 4.5% |
+| job-runner | 41.83 | 4.1% |
+| smart-orchestrator | 28.00 | 2.7% |
+| 18 others | 53.99 | 5.3% |
 
-By kind of use, since the first window: development (interactive) $902.51; test runs $0.25 and scheduled runs $0.00. Test and scheduled runs send no telemetry, so their tokens have no $ (2.0 M and 0.3 M tokens, `TODO/0004`).
+| By kind of use, the same week | $ | tokens |
+|---|---|---|
+| development (interactive) | $1,021.70 | 2,702 M |
+| test runs | $0.18 | 4.3 M, 3.9 M of them without $ |
+| scheduled runs | $0.00 | 0.4 M, all without $ |
+
+Test and scheduled runs send no telemetry, so their tokens have no $ (`TODO/0004`). By machine: the Mac $1,021.86, the VM $0.02 (one request).
 
 ## 4. Frozen findings (Pro and Codex, 2026-08/09)
 
@@ -85,7 +94,7 @@ Neither provider reports a $ for a subscription quota (Claude's `*_dollars` fiel
 
 ## 5. Limits
 
-- **Each machine's slots stay on it, except the Mac's, which the VM also holds**: run on the Mac, the scripts see the Mac's usage only; run on the VM, both. The VM's Claude use was small (41 slots, the last on 10-08), so the numbers here, from the Mac, barely change.
+- **Each machine's slots stay on it, except the Mac's, which the VM also holds**: run on the Mac, the scripts see the Mac's usage only; run on the VM, both (the numbers here). The VM's Claude use is small (41 slots, the last on 10-08).
 - **A $ exists only where Claude Code sent telemetry**: none before 2026-09-30, and none for Agent SDK sessions or sessions started before telemetry was turned on. `B` is fitted only where at most 5% of a window's tokens lack one.
 - **Resolution**: the percent moves in 1% steps, 5-hour ends snap to 10 min, and a slot is 5 min (its $ counts at its middle).
 - **Small samples on Max 5x**: 7 windows at 30% or more, and one full week.

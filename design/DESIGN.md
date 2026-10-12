@@ -321,7 +321,7 @@ VM deploy: rsync the repo to `~/dev/agent-usage-tracker` there, run its `install
 | `USAGE_DATA_SOURCES.md` | what usage data exists upstream, Claude and Codex, unit and granularity |
 | `USAGE_DATA_REFERENCE.md` | what this repo captures, from where, into which table, the traps; §6 the dated change history |
 | `FOR_READERS.md` | how another project reads the data |
-| `adhoc_quotas_analysis/` | what the quota percent means (`CONCLUSIONS.md`) |
+| `adhoc_quotas_analysis/` | what the quota percent means (`CONCLUSIONS.md`; drawn: `CONCLUSIONS.html`) |
 
 Split out of `agent-statusline` on 2026-09-30: its git history up to `d744951` holds this code from 2026-08-31; older history (the original `agent-quota-tracker`) is below this repo's first commit.
 

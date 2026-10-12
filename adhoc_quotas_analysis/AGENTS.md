@@ -10,6 +10,7 @@ What is here and why: `README.md`. The answers: `CONCLUSIONS.md`. The repo's rul
 - **Never attribute a percent to a project, kind or machine**: only the $ and tokens split (`../FOR_READERS.md` rule 5).
 - **One question, one script.** The question is the first line of its docstring; add a row to `README.md`, a section to `CONCLUSIONS.md`, and a test to `../tests/test_analysis.sh`.
 - **Every number in `CONCLUSIONS.md` comes from a script here**, with the date of the run. Re-run the scripts and update the numbers and the date together. Frozen findings (§4) are never edited, only removed when wrong.
+- **`CONCLUSIONS.html` is `CONCLUSIONS.md` drawn**: the same sections and numbers; change both together.
 - **Standard library only**: no numpy, scipy or notebooks.
 - **A layout change of the runtime** is a new subcommand of `migrate_to_target.py` (or a script in its pattern): hand-run, idempotent, archives first, prints counts.
 
