@@ -62,7 +62,7 @@ Data only flows 2 → 3 → 4 and 1 → 4. Only Categories 1 and 3 cross machine
 
 ```
 ~/dev/agent-usage-tracker/          the repo (development: Mac only)
-├── README.html, README.md          the same design drawn, for Jean; its stub
+├── README.html                     the same design drawn, for Jean (the only README)
 ├── AGENTS.md                       rules for working on it, the vocabulary
 ├── FOR_READERS.md                  how other projects read the data
 ├── USAGE_DATA_SOURCES.md           what exists upstream

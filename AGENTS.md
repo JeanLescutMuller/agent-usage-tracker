@@ -10,7 +10,7 @@ agent-usage-tracker/
 ├── USAGE_DATA_SOURCES.md         # CANONICAL: what usage data exists upstream
 ├── USAGE_DATA_REFERENCE.md       # CANONICAL: what this repo captures, how, where
 ├── FOR_READERS.md                # how other projects read the data
-├── README.html (+ .md stub)      # the design, for Jean
+├── README.html                   # the design, for Jean (the only README)
 ├── design/DESIGN.md              # the same design, for agents
 ├── TODO/                         # open work, one file per task
 ├── src/                          # deployed flat to ~/opt/agent-usage-tracker/src/, except merge_claude_env.py
