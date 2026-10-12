@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 # The runtime tree (~/opt/agent-usage-tracker). Overridable for tests and for
-# writing into another tree (the VM's central copy, later).
+# hand-run steps on another tree.
 RUNTIME_DIR = Path(os.environ.get("AGENT_USAGE_TRACKER_RUNTIME") or Path.home() / "opt" / "agent-usage-tracker")
 AGENTS = ("claude", "codex")
 
@@ -70,7 +70,7 @@ CREATE TABLE poll_errors (
 );
 CREATE INDEX poll_errors_source_ts ON poll_errors(source, ts);
 -- The freshest reading of the account, whatever wrote it, on any machine,
--- with the reset rule (design/TARGET_SPEC.md §3.2): a window whose reset
+-- with the reset rule (design/DESIGN.md §3.2): a window whose reset
 -- time has passed is at 0% and its reset unknown (NULL), until a newer
 -- reading - readings stop while nobody uses Claude Code.
 CREATE VIEW latest AS
@@ -127,9 +127,9 @@ CREATE VIEW telemetry_requests AS
                     WHERE event = 'api_request' AND request_id IS NOT NULL GROUP BY request_id);
 """
 
-# Codex only (out of the first target, design/CODEX_DESIGN.md): its turns stay in
+# Codex only (out of the first target, design/DESIGN.md §13): its turns stay in
 # data/codex/sessions_usages.db, with the price-table USD. Claude's requests moved to
-# intermediary/ and its 5-min totals to aggregates.db (migration phases 2 and 5, 2026-10-10).
+# intermediary.db and its 5-min totals to aggregates/ (migration phases 2 and 5, 2026-10-10).
 CODEX_REQUESTS_SCHEMA = """
 CREATE TABLE requests (              -- one row per API request found in a transcript; rebuildable from them
     ts INTEGER NOT NULL,              -- the request's first transcript line
@@ -198,9 +198,10 @@ CREATE VIEW usage_5m AS
     GROUP BY slot_ts, folder, interactive;
 """
 
-# Category 3 (design/TARGET_SPEC.md §6): data/<agent>/aggregates.db, one
-# table. A slot row is written once, when final, and never changes; the
-# whole database is sent to the VM. Written only by ingest_aggregates.py.
+# Category 3 (design/DESIGN.md §6): data/<agent>/aggregates/<machine>.db,
+# one file per machine (P14), one table. A slot row is written once, when
+# final, and never changes; the Mac's file is sent to the VM, into the file
+# of the same name there. Written only by ingest_aggregates.py.
 AGGREGATES_SCHEMA = """
 CREATE TABLE slots (                 -- one row per 5-min slot × machine × folder × entrypoint × model
     ts INTEGER NOT NULL,              -- slot start, a multiple of 300
@@ -224,9 +225,9 @@ CREATE TABLE slots (                 -- one row per 5-min slot × machine × fol
 CREATE INDEX slots_machine_ts ON slots(machine, ts);
 """
 
-# intermediary/<agent>/requests.db (design/TARGET_SPEC.md §5): the working
+# data/<agent>/intermediary.db (design/DESIGN.md §5, P13): the working
 # tables between Category 2 and Category 3. Local, never sent; deleting
-# intermediary/ is always safe (the next run re-reads every transcript).
+# the file is always safe (the next run re-reads every transcript).
 # Written only by transcript_reader.py.
 INTERMEDIARY_SCHEMA = """
 CREATE TABLE requests (              -- one row per API request found in a transcript, counted once
@@ -250,6 +251,11 @@ CREATE TABLE scans (                 -- one row per transcript_reader.py run
     dt TEXT NOT NULL,
     complete_through_ts INTEGER NOT NULL,  -- every request that started before this is in `requests`
     requests_added INTEGER NOT NULL
+);
+CREATE TABLE offsets (               -- one row per transcript file: how far it was read
+    path TEXT PRIMARY KEY,
+    inode INTEGER NOT NULL,
+    byte_offset INTEGER NOT NULL      -- committed with the requests it gave
 );
 """
 
@@ -329,18 +335,21 @@ def open_sessions(agent: str, readonly: bool = False):
     return connect(db_path(agent, "sessions_usages"), schema, readonly)
 
 
-def open_aggregates(agent: str, readonly: bool = False):
-    return connect(db_path(agent, "aggregates"), AGGREGATES_SCHEMA, readonly)
+def aggregates_path(agent: str, machine: str | None = None) -> Path:
+    """data/<agent>/aggregates/<machine>.db: one file per machine (P14),
+    this machine's by default."""
+    machine = machine or machine_name()
+    if not re.fullmatch(r"[A-Za-z0-9-]+", machine):
+        raise ValueError(f"not a machine name: {machine!r}")
+    return db_path(agent, "aggregates").with_suffix("") / f"{machine}.db"
 
 
-def intermediary_dir(agent: str) -> Path:
-    if agent not in AGENTS:
-        raise ValueError(f"unknown agent {agent!r}")
-    return RUNTIME_DIR / "intermediary" / agent
+def open_aggregates(agent: str, readonly: bool = False, machine: str | None = None):
+    return connect(aggregates_path(agent, machine), AGGREGATES_SCHEMA, readonly)
 
 
 def open_intermediary(agent: str, readonly: bool = False):
-    return connect(intermediary_dir(agent) / "requests.db", INTERMEDIARY_SCHEMA, readonly)
+    return connect(db_path(agent, "intermediary"), INTERMEDIARY_SCHEMA, readonly)
 
 
 def row_hash(raw: str, key: str = "") -> str:

@@ -27,7 +27,7 @@ created_by: chan-lescut-macbook-pro, claude, 18992588-d956-40f0-84e4-45868a226a5
 ---
 ## Context
 
-Claude Code deletes transcripts after `cleanupPeriodDays` (365 on the Mac). The slots keep Claude's aggregates for good, but the per-request rows in `intermediary/` are rebuilt from the transcripts and would lose their oldest requests. Codex's session files (per-turn tokens and quota snapshots) follow Codex's own retention rules, not checked yet. Proposed if history beyond a year matters: a nightly extraction of the usage records only (a few MB instead of ~517 MB of transcripts).
+Claude Code deletes transcripts after `cleanupPeriodDays` (365 on the Mac). The slots keep Claude's aggregates for good, but the per-request rows in `data/claude/intermediary.db` are rebuilt from the transcripts and would lose their oldest requests. Codex's session files (per-turn tokens and quota snapshots) follow Codex's own retention rules, not checked yet. Proposed if history beyond a year matters: a nightly extraction of the usage records only (a few MB instead of ~517 MB of transcripts).
 
 ## Done when
 

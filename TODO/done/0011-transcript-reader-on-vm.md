@@ -40,8 +40,8 @@ Only the Mac's `aggregates` job turns transcripts into slots (Category 3). The V
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
-- `design/TARGET_SPEC.md` §6, concern C9 of `design/OPEN_QUESTIONS.md`
+- `design/DESIGN.md` §6, concern C9 of `git show 1ced0c4:design/OPEN_QUESTIONS.md`
 
 ## Result
 
-The premise was wrong: the VM already runs its own `aggregates` job (design P12, `design/OPEN_QUESTIONS.md` C9); its slots stay on the VM (41 slots, the last on 2026-10-08). `adhoc_quotas_analysis/windows.py`, re-run on the VM with both machines' slots on 2026-10-11, still finds the same 5 windows with no activity: not the VM's Claude Code, but use outside the transcripts (claude.ai, the apps, cloud sessions); recorded in `adhoc_quotas_analysis/CONCLUSIONS.md` §1 and §5.
+The premise was wrong: the VM already runs its own `aggregates` job (design P12, `git show 1ced0c4:design/OPEN_QUESTIONS.md` C9); its slots stay on the VM (41 slots, the last on 2026-10-08). `adhoc_quotas_analysis/windows.py`, re-run on the VM with both machines' slots on 2026-10-11, still finds the same 5 windows with no activity: not the VM's Claude Code, but use outside the transcripts (claude.ai, the apps, cloud sessions); recorded in `adhoc_quotas_analysis/CONCLUSIONS.md` §1 and §5.

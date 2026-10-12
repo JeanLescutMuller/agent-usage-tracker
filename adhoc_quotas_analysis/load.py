@@ -3,8 +3,8 @@ from the runtime (~/opt/agent-usage-tracker, or AGENT_USAGE_TRACKER_RUNTIME).
 
   readings()  Category 1: every Claude quota reading, both machines' (the same rows on each)
   windows()   the 5-hour or 7-day windows rebuilt from the readings, one per plan x reset time
-  slots()     Category 3: the 5-min slots of every machine this runtime holds
-              (the Mac: its own; the VM: its own + central/<machine>/ copies)
+  slots()     Category 3: the 5-min slots of every machine this runtime holds,
+              data/claude/aggregates/<machine>.db (the Mac: its own; the VM: its own + the Mac's)
 
 Claude only. Nothing here computes a $: `usd` is Claude Code's own, where it exists.
 """
@@ -105,7 +105,7 @@ TOKEN_COLUMNS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_wr
 def slots() -> list[dict]:
     """Every slot this runtime holds, oldest first, plus `tokens` (all six token columns). `<synthetic>` rows
     are Claude Code's own error stubs (a rejected request): no quota used, no window opened, left out."""
-    l_paths = [RUNTIME / "data/claude/aggregates.db"] + sorted(RUNTIME.glob("central/*/data/claude/aggregates.db"))
+    l_paths = sorted(RUNTIME.glob("data/claude/aggregates/*.db"))
     l_out = []
     for path in l_paths:
         if not path.exists():

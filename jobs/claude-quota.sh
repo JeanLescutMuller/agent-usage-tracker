@@ -1,6 +1,6 @@
 #!/bin/bash
 # ~/opt/agent-usage-tracker/claude-quota.sh: job agent-usage-tracker.claude-quota.
-# Requirements (design/TARGET_SPEC.md §3.3, §3.4):
+# Requirements (design/DESIGN.md §3.3, §3.4):
 #   - one reading of the Claude account's quota (GET /api/oauth/usage) when the account's newest reading, any
 #     source, any machine, is too old; Mac and VM, the same file, tick every 60 s
 #   - the Mac syncs the readings with the VM every 2 min, both ways, before deciding (the VM cannot reach the Mac)

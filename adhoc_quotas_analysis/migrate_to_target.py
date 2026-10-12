@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-time, idempotent, hand-run migration (2026-10): from the design of
-2026-10-10 to design/TARGET_SPEC.md, in the phases of design/MIGRATION_PLAN.md.
+2026-10-10 to design/DESIGN.md, in the phases of design/MIGRATION_PLAN.md (git 1ced0c4).
 One subcommand per step of that plan; each is safe to re-run, archives what
 it changes first, and prints counts. Every run is also appended to
 <runtime>/data/_archive/migrate_to_target.log (data/_archive survives
@@ -54,7 +54,7 @@ Subcommands (more are added as the phases are built):
   check-intermediary
            (step 2.5, every machine, after the first `aggregates` run)
            every Claude request of the old data/claude/sessions_usages.db
-           `requests` table is in intermediary/claude/requests.db with the
+           `requests` table is in data/claude/intermediary.db with the
            same five token counts; and the slots written so far add up to
            the same requests, tokens and $ as a separate count over
            intermediary/ + telemetry. Exits 1 on any difference. Still
@@ -83,6 +83,24 @@ Subcommands (more are added as the phases are built):
            again); state/transcript_reader/offsets.json (the old Claude
            offsets) removed. Codex's sessions database is untouched.
            Idempotent.
+  data-layout
+           (2026-10-12, P13 + P14 of design/DESIGN.md §11; every machine,
+           with its `aggregates` job paused - and on the VM, the Mac's too,
+           which sends to it - then install.sh) everything under data/:
+           - intermediary/claude/requests.db + offsets.json copied into
+             data/claude/intermediary.db (tables requests, scans, offsets),
+             the counts compared; the old folder then moved whole into
+             data/_archive/ (that move is its backup);
+           - data/claude/aggregates.db, and on the VM every
+             central/<machine>/data/claude/aggregates.db, copied into
+             data/_archive/ and then moved to
+             data/claude/aggregates/<machine>.db - moved, not re-inserted,
+             so the rowids, and the Mac's send watermark, stay valid; each
+             file must hold only that machine's slots;
+           - central/_archive/ moved to data/_archive/central-push-era/,
+             and central/ removed once empty.
+           Refuses while an aggregates run or a receive is in progress.
+           Idempotent: what is already moved is said and skipped.
 
 Usage:
   python3 adhoc_quotas_analysis/migrate_to_target.py STEP [options] [--runtime DIR]
@@ -101,7 +119,8 @@ from pathlib import Path
 
 parser = argparse.ArgumentParser()
 parser.add_argument("step", choices=["backup", "pause", "cat1-shared", "sync-init", "cat1-machine", "cat1-seed-vm",
-                                    "remove-trigger", "check-intermediary", "archive-central", "view-latest", "remove-legacy", "drop-old-requests"])
+                                    "remove-trigger", "check-intermediary", "archive-central", "view-latest", "remove-legacy", "drop-old-requests",
+                                    "data-layout"])
 parser.add_argument("job", nargs="?", help="pause, remove-trigger: the job (e.g. claude-quota)")
 parser.add_argument("--runtime", type=Path, default=Path.home() / "opt" / "agent-usage-tracker")
 parser.add_argument("--peer", help="cat1-shared: the other machine (ssh alias)")
@@ -322,7 +341,7 @@ def remove_trigger() -> None:
 
 def check_intermediary() -> None:
     me = usage_db.machine_name()
-    inter = open_rw(usage_db.intermediary_dir("claude") / "requests.db")
+    inter = open_rw(usage_db.db_path("claude", "intermediary"))
     inter.execute("PRAGMA query_only = ON")
     d_new = {r[0]: r[1:] for r in inter.execute(
         "SELECT request_id, input_tokens, output_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens FROM requests")}
@@ -341,7 +360,7 @@ def check_intermediary() -> None:
     else:
         say(f"the old requests table is gone (phase 5): only the slots are checked; {len(d_new)} requests in intermediary")
     # The slots written so far against a separate count of the same requests.
-    agg = open_rw(usage_db.db_path("claude", "aggregates"))
+    agg = open_rw(usage_db.aggregates_path("claude", me))
     agg.execute("PRAGMA query_only = ON")
     end = agg.execute("SELECT COALESCE(MAX(ts) + 300, 0) FROM slots WHERE machine = ?", (me,)).fetchone()[0]
     slots = agg.execute("SELECT COUNT(*), SUM(requests), SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens "
@@ -439,8 +458,104 @@ def drop_old_requests() -> None:
     say(f"dropped {l_old or 'nothing (already gone)'}; left: {counts(db)}")
 
 
+def data_layout() -> None:
+    busy = [] if os.environ.get("MIGRATE_SKIP_BUSY_CHECK") else \
+        subprocess.run(["pgrep", "-f", "aggregate_slots.py|receive_from_machine.py"], capture_output=True, text=True).stdout.split()
+    if busy:
+        sys.exit(f"data-layout: an aggregates run or a receive is in progress (pids {busy}): pause the jobs, wait, run again")
+    data = args.runtime / "data" / "claude"
+
+    def checkpointed(path: Path) -> sqlite3.Connection:
+        """The database with its WAL folded in, so the file alone is complete."""
+        db = open_rw(path)
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return db
+
+    def move_db(source: Path, target: Path, machine: str) -> None:
+        """source -> target (one machine's slots), after a copy into data/_archive/."""
+        if not source.exists():
+            say(f"{source.relative_to(args.runtime)}: absent (already moved)")
+            return
+        if target.exists():
+            sys.exit(f"data-layout: both {source} and {target} exist: check by hand")
+        db = checkpointed(source)
+        l_machines = [r[0] for r in db.execute("SELECT DISTINCT machine FROM slots")]
+        if set(l_machines) - {machine}:
+            sys.exit(f"data-layout: {source} holds slots of {l_machines}, not only {machine}")
+        copy_path = ARCHIVE / f"{source.relative_to(args.runtime).as_posix().replace('/', '__')}.pre-data-layout-{STAMP}.db"
+        copy = sqlite3.connect(copy_path)
+        db.backup(copy)
+        say(f"copied {source.relative_to(args.runtime)} to {copy_path.name}: {counts(copy)}")
+        copy.close()
+        n_rows, max_rowid = db.execute("SELECT COUNT(*), MAX(rowid) FROM slots").fetchone()
+        db.close()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+        for side in ("-wal", "-shm"):
+            Path(f"{source}{side}").unlink(missing_ok=True)
+        db = open_rw(target)
+        assert db.execute("SELECT COUNT(*), MAX(rowid) FROM slots").fetchone() == (n_rows, max_rowid)
+        say(f"{source.relative_to(args.runtime)} -> {target.relative_to(args.runtime)}: {n_rows} slots, max rowid {max_rowid}")
+
+    # P13: intermediary/claude/ -> data/claude/intermediary.db
+    old_dir = args.runtime / "intermediary" / "claude"
+    new_path = usage_db.db_path("claude", "intermediary")
+    if (old_dir / "requests.db").exists():
+        old = checkpointed(old_dir / "requests.db")
+        n_req, n_scans = (old.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("requests", "scans"))
+        old.close()
+        try:
+            d_offsets = json.loads((old_dir / "offsets.json").read_text())
+        except (OSError, ValueError):
+            d_offsets = {}
+        new = usage_db.open_intermediary("claude")
+        if new.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 0:
+            new.execute("ATTACH DATABASE ? AS old", (str(old_dir / "requests.db"),))
+            new.execute("BEGIN IMMEDIATE")
+            new.execute("INSERT INTO main.requests SELECT * FROM old.requests")
+            new.execute("INSERT INTO main.scans SELECT * FROM old.scans")
+            new.executemany("INSERT INTO main.offsets (path, inode, byte_offset) VALUES (?,?,?)",
+                            [(path, ino, offset) for path, (ino, offset) in d_offsets.items()])
+            new.execute("COMMIT")
+            new.execute("DETACH DATABASE old")
+        got = tuple(new.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("requests", "scans", "offsets"))
+        if got != (n_req, n_scans, len(d_offsets)):
+            sys.exit(f"data-layout: {new_path.name} holds {got}, the old folder {(n_req, n_scans, len(d_offsets))}: check by hand")
+        new.close()
+        target = ARCHIVE / f"intermediary-pre-data-layout-{STAMP}"
+        (args.runtime / "intermediary").rename(target)
+        say(f"intermediary/claude/ -> {new_path.relative_to(args.runtime)}: requests {got[0]}, scans {got[1]}, offsets {got[2]}; "
+            f"the old folder moved to {target.relative_to(args.runtime)}")
+    else:
+        say(f"intermediary/claude/: absent; {new_path.relative_to(args.runtime)} {'exists' if new_path.exists() else 'is built by the next run'}")
+
+    # P14: one aggregates file per machine; central/ goes
+    me = usage_db.machine_name()
+    move_db(data / "aggregates.db", usage_db.aggregates_path("claude", me), me)
+    central = args.runtime / "central"
+    for folder in sorted(p for p in central.iterdir() if p.is_dir() and p.name != "_archive") if central.is_dir() else []:
+        move_db(folder / "data" / "claude" / "aggregates.db", usage_db.aggregates_path("claude", folder.name), folder.name)
+        for d in (folder / "data" / "claude", folder / "data", folder):
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+        if folder.exists():
+            say(f"{folder.relative_to(args.runtime)}: not empty, left for a look by hand: {[str(f) for f in folder.rglob('*')][:5]}")
+    if (central / "_archive").is_dir():
+        target = ARCHIVE / "central-push-era"
+        if target.exists():
+            target = target.with_name(f"{target.name}-{STAMP}")
+        (central / "_archive").rename(target)
+        say(f"central/_archive/ -> {target.relative_to(args.runtime)}")
+    if central.is_dir() and not any(central.iterdir()):
+        central.rmdir()
+        say("central/ removed")
+    say(f"now: {sorted(str(p.relative_to(args.runtime)) for p in data.rglob('*.db'))}; "
+        f"central/ {'still there' if central.exists() else 'gone'}")
+
+
 {"backup": backup, "pause": pause, "cat1-shared": cat1_shared, "sync-init": sync_init,
  "cat1-machine": cat1_machine, "cat1-seed-vm": cat1_seed_vm,
  "remove-trigger": remove_trigger, "check-intermediary": check_intermediary,
  "archive-central": archive_central, "view-latest": view_latest,
- "remove-legacy": remove_legacy, "drop-old-requests": drop_old_requests}[args.step]()
+ "remove-legacy": remove_legacy, "drop-old-requests": drop_old_requests,
+ "data-layout": data_layout}[args.step]()

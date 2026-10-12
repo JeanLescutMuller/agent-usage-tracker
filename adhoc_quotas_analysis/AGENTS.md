@@ -4,7 +4,7 @@ What is here and why: `README.md`. The answers: `CONCLUSIONS.md`. The repo's rul
 
 ## Rules
 
-- **A reader, never a writer.** Open a database only through `load.py` (`PRAGMA query_only`, `../FOR_READERS.md`). Read Category 1 (the readings) and Category 3 (`slots`); never `sessions_usages.db`, `intermediary/` or the transcripts, except in `verify_token_costs.py`, which checks those sources.
+- **A reader, never a writer.** Open a database only through `load.py` (`PRAGMA query_only`, `../FOR_READERS.md`). Read Category 1 (the readings) and Category 3 (`slots`); never `sessions_usages.db`, `intermediary.db` or the transcripts, except in `verify_token_costs.py`, which checks those sources.
 - **No $ computed.** A $ is Claude Code's own `usd`. Where it is missing, show the tokens; never price them.
 - **Always per plan.** Never mix two plans in a window, a budget or a ratio. When the plan changes, add a row to `load.PLANS` and to `../USAGE_DATA_REFERENCE.md` §6.
 - **Never attribute a percent to a project, kind or machine**: only the $ and tokens split (`../FOR_READERS.md` rule 5).

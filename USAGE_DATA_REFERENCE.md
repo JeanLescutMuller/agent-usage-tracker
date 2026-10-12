@@ -4,13 +4,13 @@
 
 Markers: **[verified]** was measured on this machine's data; **[docs]** comes from official documentation.
 
-*Last verified: 2026-10-10 (migration to `design/TARGET_SPEC.md`, phases 0–5: the slots equal a separate count of every request, Mac 24,004 / VM 189; the VM's copy of the Mac's slots identical; both status lines and auto-apply read `latest`; both machines hold the same Claude readings: VM filled from its central copy, 0 missing, first sync both ways; machine names merged: per-table counts, Mac vs VM copy, identical up to the rows written since the last push); 2026-10-08 (central store on the VM: first push, per-table counts identical; move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
+*Last verified: 2026-10-12 (P13 + P14 on both machines: the slots equal a separate count of every request, Mac 3,331 / VM 41, the VM's copy of the Mac's identical); before: 2026-10-10 (migration to `design/DESIGN.md`, phases 0–5: the slots equal a separate count of every request, Mac 24,004 / VM 189; the VM's copy of the Mac's slots identical; both status lines and auto-apply read `latest`; both machines hold the same Claude readings: VM filled from its central copy, 0 missing, first sync both ways; machine names merged: per-table counts, Mac vs VM copy, identical up to the rows written since the last push); 2026-10-08 (central store on the VM: first push, per-table counts identical; move to SQLite: databases, gates, views, the transcript reader, the migration's counts); 2026-10-04 (push dating and dedup, source names, Claude poller cadence, error rows moved out of data/); 2026-09-30 for everything else. Row counts are as of the 2026-10-08 migration: 172,250 Claude readings, 6,895 Codex readings, 10,889 failed poll attempts, 35,808 session snapshots, 2,714 telemetry events, 18,151 transcript requests.*
 
 ---
 
 ## 1. Overview
 
-All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `src/statusline_payload_reader.py`, and displays the line that prints: the `latest` view (README.html's "Contract with agent-statusline").
+All data lives under `~/opt/agent-usage-tracker/` (the deployed runtime; the code lives in `~/dev/agent-usage-tracker`). The status line is a separate project, `agent-statusline`: it feeds this one by piping each Claude render's raw stdin payload into `src/statusline_payload_reader.py`, and displays the line that prints: the `latest` view (design/DESIGN.md §7.1).
 
 **Usage data is in two SQLite databases per agent, split by scope** (since 2026-10-08; JSONL files before, same split since 2026-09-30):
 
@@ -19,7 +19,8 @@ data/
 ├── claude/
 │   ├── account_quotas.db      account scope: account_quotas (readings), poll_errors (failed poll attempts), view latest
 │   ├── sessions_usages.db     session scope: telemetry, session_snapshots (Codex's: its turns, requests + scans)
-│   └── aggregates.db          Category 3: slots (final 5-min slots), since 2026-10-10
+│   ├── intermediary.db        local working tables: requests, scans, offsets (deletable, rebuilt from the transcripts)
+│   └── aggregates/<machine>.db  Category 3: slots (final 5-min slots), one file per machine; the VM holds the Mac's too
 ├── codex/
 │   └── account_quotas.db      account scope (no Codex sessions database yet - see below)
 └── _archive/                  originals kept by one-time migrations; pre-sqlite-20261008T090432Z/ holds every JSONL file the databases were built from
@@ -36,7 +37,7 @@ data/
 
 **Common to every table:** `ts` (Unix epoch, when the row was true: `observed_at` for push and telemetry rows, the poll time for poll rows, the request's first line for requests) and `dt` (the same instant, ISO 8601 UTC) come first. Every table except `requests` and `scans` keeps the row's JSON **verbatim in `raw`**: for migrated rows the original JSONL line byte for byte, for new rows the same shape the JSONL writer produced. So §2, §3 and §9 below describe `raw`, and any old JSONL reader is served by `SELECT raw FROM <table> ORDER BY rowid`. Every row is insert-only; `row_hash` (SHA-1 of `raw`, UNIQUE) or `request_id` (UNIQUE) makes re-inserting it a no-op.
 
-**Only the gates write.** `src/ingest_account_quota.py` writes `account_quotas.db`, `src/ingest_session_usage.py` writes `sessions_usages.db`, `src/ingest_aggregates.py` writes `aggregates.db`; collectors hand rows to them. The gates reject a malformed row, an account row with per-session fields, and a session row with any percent-like key.
+**Only the gates write.** `src/ingest_account_quota.py` writes `account_quotas.db`, `src/ingest_session_usage.py` writes `sessions_usages.db`, `src/ingest_aggregates.py` writes `aggregates/<machine>.db`; collectors hand rows to them. Exception: `src/transcript_reader.py` writes `intermediary.db` directly (not data: deletable). The gates reject a malformed row, an account row with per-session fields, and a session row with any percent-like key.
 
 **Reading: open the database normally and run `PRAGMA query_only = ON`, not a `mode=ro` URI.** macOS's system SQLite intermittently refuses a mode=ro open of these WAL databases ("unable to open database file") when no connection holds the `-shm` file at that instant, which is most of the time [verified 2026-10-08].
 
@@ -67,9 +68,9 @@ The latest Claude reading is the view **`latest`** of `account_quotas.db` (§4):
 | **Codex plan-history poller** — `src/codex_plan_history_poller.py` | Job `codex-plan-history`, hourly tick, Mac only | ChatGPT backend `plan_limit_history?days=7` (Sources §4.4) | codex `account_quotas` (`source: "codex_plan_limit_history"`) or `poll_errors` |
 | **Telemetry receiver** — `src/telemetry_receiver.py` | Its own LaunchAgent, always running (`KeepAlive`); Claude Code pushes to it | Claude Code's OpenTelemetry events (Sources §3.7) | `telemetry` (`source: "claude_otel"`, §9) |
 | **Transcript reader** — `src/transcript_reader.py` | Job `aggregates` (until 2026-10-10 21:39 UTC: job `transcripts`), every 5 min | Claude Code transcripts `~/.claude/projects/**/*.jsonl` (Sources §3.4) and Codex session files `~/.codex/{sessions,archived_sessions}/**/*.jsonl` (Sources §4.1) | Claude: `intermediary/claude/requests.db` (local, not data); Codex: `requests` + `scans` in its sessions database (§10) |
-| **Slots** — `src/aggregate_slots.py` → `src/ingest_aggregates.py` | Job `aggregates`, right after the reader | `intermediary/`, the `telemetry` table | `slots` in `data/claude/aggregates.db`: final 5-min slots × machine × folder × entrypoint × model (`design/TARGET_SPEC.md` §6) |
+| **Slots** — `src/aggregate_slots.py` → `src/ingest_aggregates.py` | Job `aggregates`, right after the reader | `intermediary.db`, the `telemetry` table | `slots` in `data/claude/aggregates/<this machine>.db`: final 5-min slots × machine × folder × entrypoint × model (`design/DESIGN.md` §6) |
 | **Send** — `src/push_to_central.py` | The Mac's `aggregates` job, after the slots (until 2026-10-10 21:48 UTC: its own `push` job, every row) | The new `slots` of `aggregates.db` | Nothing locally except `state/push/watermarks.json`; sends them to the VM (§11) |
-| **Central receiver** — `src/receive_from_machine.py` | On the VM, over ssh, per send | Another machine's slots | `ingest_aggregates.py`, into `central/<machine>/data/claude/aggregates.db` (§11) |
+| **Receiver** — `src/receive_from_machine.py` | On the VM, over ssh, per send | Another machine's slots | `ingest_aggregates.py`, into `data/claude/aggregates/<machine>.db` (§11) |
 | **Codex status line** — agent-statusline's `providers/codex-statusline-command.sh`, not this project | Every render of the patched Codex TUI | Codex stdin | Displays its own stdin reading; writes nothing of ours |
 
 ### 1.2 What each writer captures, by unit
@@ -88,7 +89,7 @@ The latest Claude reading is the view **`latest`** of `account_quotas.db` (§4):
 | Writer | Writes a history row when | Skips when |
 |---|---|---|
 | Claude push | The render's stdin has `rate_limits` **and** the transcript's last 256 KB contain an `assistant` entry to date it (`observed_at`). Deduplicated per session since 2026-10-04: an account row only when `(observed_at, percents, resets)` differs from this session's last one, a session row only when `(session_cost_usd, prompt_cache, model_id)` does. A new API response with unchanged percents still adds a row. | No `rate_limits` on stdin (non-subscriber, or a window just expired); no `assistant` entry in that window: then **nothing** is written, state file included; a re-render of a reading this session already wrote |
-| Claude poller | When the account's newest reading (`latest`: any source, any machine) is ≥ 110 s old (Mac) / 290 s (VM) while a Claude status line rendered here in the last 90 s; otherwise ≥ 300 s / 480 s: the VM waits for the Mac's threshold + the 2-min sync + a tick, so it polls only while the Mac sleeps. Before deciding, the Mac syncs the readings with the VM every 2 min, both ways: each machine's own readings (`machine`) go to the other (`design/TARGET_SPEC.md` §3.3). A 429's Retry-After is waited out on its own machine only. A failed attempt goes to `poll_errors` (never synced). | Mac asleep (launchd fires once on wake) |
+| Claude poller | When the account's newest reading (`latest`: any source, any machine) is ≥ 110 s old (Mac) / 290 s (VM) while a Claude status line rendered here in the last 90 s; otherwise ≥ 300 s / 480 s: the VM waits for the Mac's threshold + the 2-min sync + a tick, so it polls only while the Mac sleeps. Before deciding, the Mac syncs the readings with the VM every 2 min, both ways: each machine's own readings (`machine`) go to the other (`design/DESIGN.md` §3.3). A 429's Retry-After is waited out on its own machine only. A failed attempt goes to `poll_errors` (never synced). | Mac asleep (launchd fires once on wake) |
 | Codex poller | Every tick while a Codex status line rendered in the last 90 s; otherwise when the last row is ≥ 5 min old | **Any Codex session file changed in the last 5 min** — the session file is then the fresher source (Sources §4.1); Mac asleep |
 | Telemetry receiver | Whenever a Claude session started after the install sends a batch (every few seconds while requests happen), interactive **and** `claude -p` | Receiver down (Claude Code drops the batch, no disk buffer); sessions started before the install |
 | Transcript reader | Every 5 min; a request once its first transcript line is ≥ 15 min old (a request's lines span ≤ 292 s), each `request_id` once | Nothing new since the last run (a byte offset per file); Mac asleep |
@@ -223,7 +224,7 @@ Only **finished** windows appear, and only windows that had usage. Each fetch ov
 
 ## 4. The latest reading: the view `latest`
 
-`latest` (in `account_quotas.db`) is the account's freshest reading, any source, any machine, with the reset rule (`design/TARGET_SPEC.md` §3.2): a window whose reset time has passed reads 0% with its reset NULL, until a newer reading. Columns `ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts`. The reader prints it for agent-statusline as six `\034`-separated fields, `five_pct, five_reset, week_pct, week_reset, source, observed_at`, percents rounded (the display does integer arithmetic), a passed reset empty.
+`latest` (in `account_quotas.db`) is the account's freshest reading, any source, any machine, with the reset rule (`design/DESIGN.md` §3.2): a window whose reset time has passed reads 0% with its reset NULL, until a newer reading. Columns `ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts`. The reader prints it for agent-statusline as six `\034`-separated fields, `five_pct, five_reset, week_pct, week_reset, source, observed_at`, percents rounded (the display does integer arithmetic), a passed reset empty.
 
 Until 2026-10-10 the same six fields lived in a file, `state/quota/claude`, written by the account gate whenever a reading was newer than the one it held (removed in migration phase 4). Its `source` was `X` / `P` until 2026-10-04, and a push reading with no transcript date was stamped *now*, so an idle session's frozen reading could hold the file.
 
@@ -276,7 +277,7 @@ The `raw` column of both account databases carries several row shapes (§2.2's o
 ### 5.7 Recent data, and retention
 
 - **Recent rows: filter on `ts`** (indexed in every table) instead of scanning. The latest Claude reading is `SELECT * FROM latest`.
-- **Per-folder usage: read `slots` in `data/claude/aggregates.db`** (§10). It already adds the requests telemetry sees and transcripts never record (prompt suggestions, summaries, web search, titles), keeps Claude Code's own cost only, and says what that cost does not cover (`tokens_without_usd`). The most recent slots appear 15 min after they end.
+- **Per-folder usage: read `slots` in `data/claude/aggregates/<machine>.db`** (§10). It already adds the requests telemetry sees and transcripts never record (prompt suggestions, summaries, web search, titles), keeps Claude Code's own cost only, and says what that cost does not cover (`tokens_without_usd`). The most recent slots appear 15 min after they end.
 - **Retention: none — rows are kept indefinitely.** Revisit if `data/claude/` passes ~1 GB (it was 178 MB after the migration).
 
 ### 5.8 No Claude reading at all while nobody uses Claude Code on a machine (accepted, 2026-10-10)
@@ -313,13 +314,14 @@ The Claude poller borrows each machine's Claude Code login, whose access token l
 | **2026-10-08** | **Codex turns in `data/codex/sessions_usages.db`.** The transcript reader also reads `~/.codex/sessions` and `archived_sessions`: one `requests` row per `token_count` event (request_id `<thread>:<running total>`), folder and model from the session, entrypoint from `session_meta.source`. Backfill: 77 files, 2,871 turns | Monthly tokens per model identical to ccusage 20.0.26; `usd` only for `gpt-5.6-sol` ($4/$20, cached 0.1x: ccusage's price, which reproduces its totals), NULL for other Codex models |
 | **2026-10-10** | **One name per machine.** The Mac had no fixed `HostName`, so its network-derived hostname drifted on 2026-10-08: `chan-lescut-macbook-pro-1` until 16:38 UTC, `Chan-Lescut-MacBook-Pro` (18 requests, 16:59 → 17:03), then `chan-lescut-macbook-pro`; the VM held two central folders for it. The Mac now has a fixed `HostName`, `usage_db.machine_name()` follows job-runner's rule, and `adhoc_quotas_analysis/merge_machine_names.py` relabelled 18,990 Claude + 2,871 Codex requests (Mac and VM) and merged `central/chan-lescut-macbook-pro-1/` into `central/chan-lescut-macbook-pro/` (every old row found after the merge; the old folder and a tar backup are under `central/_archive/`) | `requests.machine` has one value per machine; the Mac's whole history is in one central folder |
 | 2026-10-10 | A Claude poller's 429 makes only its own machine wait (job `WAIT`, no longer `WAIT … all`) | The endpoint counts 429s per login token, i.e. per machine (`USAGE_DATA_SOURCES.md` §3.5): the Mac no longer stops polling for up to an hour because the VM was refused |
-| **2026-10-10** | **Both machines hold the same Claude readings** (migration phase 1, `design/MIGRATION_PLAN.md`): `account_quotas.machine` (also in `raw` from now on) names the machine that took each reading; the Mac syncs them with the VM every 2 min, both ways, replacing `--peer`; the VM's database was filled once from its central copy of the Mac's (177,327 readings, 0 missing) | Rows before 2026-10-10 labelled by the database that held them; the 72 readings `--peer` copied between the machines (14:10–21:19 UTC) have `machine` NULL. A reading reaches the other machine up to 2 min after it is written: read new rows by `rowid` (`FOR_READERS.md`) |
+| **2026-10-10** | **Both machines hold the same Claude readings** (migration phase 1, `git show 1ced0c4:design/MIGRATION_PLAN.md`): `account_quotas.machine` (also in `raw` from now on) names the machine that took each reading; the Mac syncs them with the VM every 2 min, both ways, replacing `--peer`; the VM's database was filled once from its central copy of the Mac's (177,327 readings, 0 missing) | Rows before 2026-10-10 labelled by the database that held them; the 72 readings `--peer` copied between the machines (14:10–21:19 UTC) have `machine` NULL. A reading reaches the other machine up to 2 min after it is written: read new rows by `rowid` (`FOR_READERS.md`) |
 | **2026-10-10** | **Category 3: `slots` in `data/claude/aggregates.db`** (migration phase 2): the job `aggregates` replaces `transcripts`; Claude requests are read into `intermediary/claude/` (local, no `usd`, no `machine`), then every final 5-min slot is written once, per machine × folder × entrypoint × model, with Claude Code's own `usd` where telemetry has it and `tokens_without_usd` for the rest. Rebuilt from every transcript: Mac 22,802 requests (every one of the 22,794 old rows found again, same tokens), 2,944 slots; VM 189, 41 | Claude's `requests`, `scans`, `usage_requests`, `usage_5m` in `sessions_usages.db` stop growing at 21:39 UTC: read `slots`. Before 2026-09-30 (no telemetry) `usd` is NULL |
-| **2026-10-10** | **Only Category 3 goes to the VM** (migration phase 3): the `push` job is gone; the Mac's `aggregates` job sends its new slots into `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (first send: 2,945 slots, the same totals on both sides); the old `central/<machine>/` copies moved whole to `central/_archive/<machine>-push-era/` | Codex rows and the Mac's raw Claude rows no longer reach the VM (accepted, `design/CODEX_DESIGN.md`) |
+| **2026-10-10** | **Only Category 3 goes to the VM** (migration phase 3): the `push` job is gone; the Mac's `aggregates` job sends its new slots into `central/chan-lescut-macbook-pro/data/claude/aggregates.db` (first send: 2,945 slots, the same totals on both sides); the old `central/<machine>/` copies moved whole to `central/_archive/<machine>-push-era/` | Codex rows and the Mac's raw Claude rows no longer reach the VM (accepted, `design/DESIGN.md` §13) |
 | **2026-10-10** | **The latest reading is a view, not a file** (migration phase 4): `latest` applies the reset rule (a passed reset reads 0%); agent-statusline runs `src/statusline_payload_reader.py` directly, which prints it; auto-apply queries it; `bin/ingest-claude-statusline.sh` and `state/quota/claude` removed | No change to stored rows. A reader of the old file reads the view (`FOR_READERS.md`) |
 | **2026-10-10** | **Clean-up** (migration phase 5): Claude's frozen `requests`, `scans`, `usage_requests`, `usage_5m` dropped from `sessions_usages.db` (copied to `data/_archive/` first); `usage_db.PRICES` keeps only Codex's `gpt-5.6-sol` | Claude has no `$` computed by this repo any more: only Claude Code's own (`slots.usd`, `telemetry.cost_usd`, `session_snapshots`) |
 | **2026-10-10** | **Scheduling moves to job-runner** (separate project): one trigger and one entrypoint per job (`claude-quota`, `codex-quota`, `codex-plan-history`, `transcripts`, `push`); `run_pollers.py` and the pollers' own interval code go. The Claude poller's timing now reads the age of `state/quota/claude` (any source, any machine) instead of its own last poll, and a 429's Retry-After holds both machines. **Readings cross machines**: the Mac stores the VM's fresh reading in its own database instead of polling, and hands the VM each reading it polls (same `raw`, same `row_hash`), so each machine's `account_quotas` (and its `central/<machine>/` copy) can hold rows taken on the other. The Codex pollers no longer run on the VM | A Claude `claude_api` row is no longer proof that this machine called the API; fewer `claude_api` rows while status-line readings are fresh |
 | 2026-10-10 | Rule written down: read new rows by `rowid`, never by `ts` or `written_ts` (§1) | No change to the data; an incremental reader by `ts` or `written_ts` has always been able to miss rows written late |
+| **2026-10-12** | **Everything a machine keeps is under `data/`** (`design/DESIGN.md` P13, P14; `migrate_to_target.py data-layout`, 18:45 UTC): `intermediary/claude/requests.db` + `offsets.json` → `data/claude/intermediary.db` (tables `requests`, `scans`, `offsets`; the offsets now commit with their requests); Category 3 is one file per machine, `data/claude/aggregates/<machine>.db` - the Mac's own, the VM's own, and on the VM the Mac's copy (until then `central/chan-lescut-macbook-pro/data/claude/aggregates.db`); `central/_archive/` → `data/_archive/central-push-era/`, `central/` gone. Files moved, not re-inserted: rowids and the Mac's send watermark kept | The user's choice: `data/` holds every database, and a full reset of one machine's slots is deleting one file; the gate refuses a row of another machine |
 
 ---
 
@@ -348,7 +350,7 @@ Deliberately not captured because it already persists elsewhere: Codex per-turn 
 | Writer behaviour | `bash tests/run.sh` (`tests/README.md` lists what each file covers) |
 | Scope rule holds | No percent-like key path (`pct\|percent\|utiliz\|basis_points`) in any `raw` of `sessions_usages.db`; no `account_quotas.raw` with `session_cost_usd`, `prompt_cache` or a bare `session_id`. Both gates refuse such rows |
 | Transcript totals are exact | `python3 adhoc_quotas_analysis/verify_token_costs.py` (USAGE_DATA_SOURCES.md §3.4) |
-| The slots add up to their requests | `python3 adhoc_quotas_analysis/migrate_to_target.py check-intermediary` on each machine: the slots written so far against a separate count over `intermediary/` + telemetry (requests, tokens, $, tokens without $); exits 1 on a difference |
+| The slots add up to their requests | `python3 adhoc_quotas_analysis/migrate_to_target.py check-intermediary` on each machine: the slots written so far against a separate count over `intermediary.db` + telemetry (requests, tokens, $, tokens without $); exits 1 on a difference |
 | Both machines hold the same readings | `SELECT machine, COUNT(*) FROM account_quotas GROUP BY 1` on each: equal within one sync (2 min) |
 
 When any of this changes, update this file and its "Last verified" line.
@@ -394,9 +396,9 @@ Attribution attributes include the account's `user.email`; the file stays local,
 
 ---
 
-## 10. Category 3: `slots` in `data/claude/aggregates.db`, and the requests behind it
+## 10. Category 3: `slots` in `data/claude/aggregates/<machine>.db`, and the requests behind it
 
-One row per final 5-minute slot × machine × folder × entrypoint × model, since 2026-10-10, rebuilt then from every transcript (back to 2026-07-30). Written once, when final, by the job `aggregates` (`src/aggregate_slots.py` through the gate `src/ingest_aggregates.py`), never changed; the Mac's are also in the VM's `central/chan-lescut-macbook-pro/` (§11). How it is built: `design/TARGET_SPEC.md` §6.
+One row per final 5-minute slot × machine × folder × entrypoint × model, since 2026-10-10, rebuilt then from every transcript (back to 2026-07-30). Written once, when final, by the job `aggregates` (`src/aggregate_slots.py` through the gate `src/ingest_aggregates.py`), never changed; the Mac's are also in the VM's `central/chan-lescut-macbook-pro/` (§11). How it is built: `design/DESIGN.md` §6.
 
 | Column | Meaning |
 |---|---|
@@ -413,24 +415,25 @@ A slot is final once it ended before the last transcript scan's "complete throug
 
 Until 2026-10-10 the Claude requests were a `requests` table in `sessions_usages.db`, with a `usd` from a price table, and the views `usage_requests` / `usage_5m`; frozen at 21:39 UTC, dropped at 22:08 (the copy in `data/_archive/claude__sessions_usages.pre-drop-requests-*.db`).
 
-**Codex rows** (`data/codex/sessions_usages.db`, since 2026-10-08, unchanged: Codex is outside the first target, `design/CODEX_DESIGN.md`) are still a `requests` table with `scans` and the views `usage_requests` / `usage_5m`: one row per turn (`token_count` event), `request_id` = `<thread id>:<running total>` (a repeated event or an archived copy is skipped), `session_id` = the thread id, `folder` and `model` from `session_meta` / the latest `turn_context`, `entrypoint` = `session_meta.source` (`cli`, `vscode`, `exec`; `subagent` for a subagent thread), `input_tokens` without the cached part, `cache_read_tokens` = `cached_input_tokens`, `output_tokens` including reasoning, `machine`, and `usd` from `usage_db.PRICES` for `gpt-5.6-sol` only. A turn is stored as soon as its event is written.
+**Codex rows** (`data/codex/sessions_usages.db`, since 2026-10-08, unchanged: Codex is outside the first target, `design/DESIGN.md` §13) are still a `requests` table with `scans` and the views `usage_requests` / `usage_5m`: one row per turn (`token_count` event), `request_id` = `<thread id>:<running total>` (a repeated event or an archived copy is skipped), `session_id` = the thread id, `folder` and `model` from `session_meta` / the latest `turn_context`, `entrypoint` = `session_meta.source` (`cli`, `vscode`, `exec`; `subagent` for a subagent thread), `input_tokens` without the cached part, `cache_read_tokens` = `cached_input_tokens`, `output_tokens` including reasoning, `machine`, and `usd` from `usage_db.PRICES` for `gpt-5.6-sol` only. A turn is stored as soon as its event is written.
 
 ---
 
-## 11. The central store on the VM `H-Frank-1`
+## 11. The Mac's slots on the VM `H-Frank-1`
 
 ```
-~/opt/agent-usage-tracker/central/
-├── chan-lescut-macbook-pro/data/claude/aggregates.db   the Mac's slots (Category 3), sent every 5 min
-└── _archive/<machine>-push-era/                         every row each machine pushed until 2026-10-10 21:48 UTC, untouched
+~/opt/agent-usage-tracker/data/claude/aggregates/
+├── H-Frank-1.db                 the VM's own slots
+└── chan-lescut-macbook-pro.db   the Mac's slots (Category 3), sent every 5 min
+~/opt/agent-usage-tracker/data/_archive/central-push-era/<machine>-push-era/   every row each machine pushed until 2026-10-10 21:48 UTC, untouched
 ```
 
-Since 2026-10-10 (migration phase 3, `design/TARGET_SPEC.md` §6.4) only Category 3 crosses: the Mac's `aggregates` job sends its new final slots (`push_to_central.py`), and `receive_from_machine.py` stores them through the gate `ingest_aggregates.py` in the Mac's own folder, named by the skill `machine-name`. The VM's own slots stay in its `data/claude/aggregates.db`. Quota readings (Category 1) go by their own 2-min sync into each machine's `data/claude/account_quotas.db`; a machine's raw rows (Category 2) never leave it.
+Since 2026-10-10 (migration phase 3, `design/DESIGN.md` §6.4) only Category 3 crosses: the Mac's `aggregates` job sends its new final slots (`push_to_central.py`), and `receive_from_machine.py` stores them through the gate `ingest_aggregates.py` in the file named after the Mac (skill `machine-name`); the gate refuses a row of any other machine. Until 2026-10-12 the Mac's copy was `central/chan-lescut-macbook-pro/data/claude/aggregates.db` and each machine's own `data/claude/aggregates.db` (§6). Quota readings (Category 1) go by their own 2-min sync into each machine's `data/claude/account_quotas.db`; a machine's raw rows (Category 2) never leave it.
 
 | Property | Detail |
 |---|---|
 | Freshness | A slot is final 15 min after it ends, then reaches the VM within 5 min while the Mac is online; a Mac asleep sends everything on its next run |
 | Completeness | Every slot the Mac wrote; a re-sent slot is a no-op; a bad row refuses its whole chunk (the job fails, nothing silently missing) |
-| Reading every machine | On the VM: `data/claude/aggregates.db` and `central/*/data/claude/aggregates.db`, `UNION ALL` of their `slots` (the `machine` column tells them apart); open with `PRAGMA query_only = ON` (§1) |
-| History before 2026-10-10 | `central/_archive/<machine>-push-era/` (full copies of the old push: every table of every database); the slots themselves were rebuilt from every transcript, so they cover it |
+| Reading every machine | On the VM: every `data/claude/aggregates/*.db`, `UNION ALL` of their `slots` (the `machine` column tells them apart); open with `PRAGMA query_only = ON` (§1) |
+| History before 2026-10-10 | `data/_archive/central-push-era/<machine>-push-era/` (full copies of the old push: every table of every database); the slots themselves were rebuilt from every transcript, so they cover it |
 

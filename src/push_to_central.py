@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Sends this machine's new Category 3 rows - the `slots` of
-data/claude/aggregates.db - to the VM (H-Frank-1), into its own folder there
-(design/TARGET_SPEC.md §6.4):
-    ~/opt/agent-usage-tracker/central/<machine>/data/claude/aggregates.db
+data/claude/aggregates/<machine>.db - to the VM (H-Frank-1), into the file
+of the same name there (design/DESIGN.md §6.4):
+    ~/opt/agent-usage-tracker/data/claude/aggregates/<machine>.db
 Run by the Mac's `aggregates` job right after it writes the slots
 (aggregate_slots.py --send-to); the VM sends nothing (its slots are already
 there). Categories 1 and 2 never go this way: quota readings have their own
 2-min sync, and a machine's raw rows never leave it (until 2026-10-10, this
-sent every row of every database; those copies are in central/_archive/).
+sent every row of every database; those copies are in data/_archive/).
 
 Push only: the VM never pulls (the Mac sleeps, goes offline, sits behind
 NAT). Each call sends the slots added since the last confirmed send (rowid
@@ -17,7 +17,8 @@ as JSON lines on the stdin of
 which hands them to the same gate there (ingest_aggregates.py). A chunk's
 watermark advances only after the VM confirmed it; a re-sent slot is a
 no-op there. So an offline run, a crash or a dropped connection just means
-the slots go on the next run. Reads only; aggregates.db is opened query_only.
+the slots go on the next run. Reads only; the file is opened query_only.
+A full reset of the VM's copy: delete it there, then set "claude/slots" to 0.
 
 Usage: python3 push_to_central.py [--central HOST]   (default: $AGENT_USAGE_TRACKER_CENTRAL or H-Frank-1)
 """

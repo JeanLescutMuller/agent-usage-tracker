@@ -27,7 +27,7 @@ created_by: chan-lescut-macbook-pro, claude, 18992588-d956-40f0-84e4-45868a226a5
 ---
 ## Context
 
-Since the 2-min sync (2026-10-10), the VM's `claude-quota` job polls only when no reading is fresh enough: Mac 110 / 300 s, VM 290 / 480 s (`design/TARGET_SPEC.md` §3.4). So far the VM has never polled while the Mac was awake, as designed. Its polling while the Mac sleeps has not been seen yet.
+Since the 2-min sync (2026-10-10), the VM's `claude-quota` job polls only when no reading is fresh enough: Mac 110 / 300 s, VM 290 / 480 s (`design/DESIGN.md` §3.4). So far the VM has never polled while the Mac was awake, as designed. Its polling while the Mac sleeps has not been seen yet.
 
 ## Done when
 

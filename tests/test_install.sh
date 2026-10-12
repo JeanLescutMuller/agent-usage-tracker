@@ -143,11 +143,12 @@ assert_not_contains "placeholders all rendered" "$(cat "$RT"/*.service "$RT"/*.t
 assert_contains "the receiver restarts if it exits" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.otel.service")" "Restart=always"
 assert_contains "claude-quota ticks every 60s" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.claude-quota.timer")" "OnUnitActiveSec=60s"
 assert_contains "aggregates every 5 min" "$(cat "$RT/com.jeanlescut.agent-usage-tracker.aggregates.timer")" "OnUnitActiveSec=300s"
-mkdir -p "$RT/central/some-mac/data/claude" && printf 'db' > "$RT/central/some-mac/data/claude/account_quotas.db"
+mkdir -p "$RT/data/claude/aggregates" && printf 'db' > "$RT/data/claude/aggregates/some-mac.db" && printf 'db' > "$RT/data/claude/intermediary.db"
 TH_OUT="$(HOME="$th_home" AGENT_USAGE_TRACKER_SKIP_LAUNCHD=1 AGENT_USAGE_TRACKER_OS=Linux bash "$REPO_ROOT/uninstall.sh" 2>&1)"
 assert_eq "uninstall removes the unit symlinks" "" "$(ls "$UNITS" 2>/dev/null)"
-assert_file_exists "central/ survives (every machine's slots, and the archived history)" "$RT/central/some-mac/data/claude/account_quotas.db"
-assert_not_contains "central/ is not an orphan" "$TH_OUT" "orphan files"
+assert_file_exists "every machine's slots survive (data/claude/aggregates/)" "$RT/data/claude/aggregates/some-mac.db"
+assert_file_missing "the intermediary tables go (rebuilt from the transcripts)" "$RT/data/claude/intermediary.db"
+assert_not_contains "no orphans" "$TH_OUT" "orphan files"
 rm -rf "$th_home"
 
 harness_summary

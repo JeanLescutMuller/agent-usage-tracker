@@ -1,0 +1,717 @@
+<!doctype html>
+<!-- agent-usage-tracker's design, drawn: the same 13 sections as design/DESIGN.md, which changes with it. One self-contained file; opens with a double-click. Becomes the README once everything is implemented. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Usage Tracker Design</title>
+<style>
+  :root {
+    --bg: #fafaf8; --fg: #1d1d1f; --muted: #6b6b70; --card: #ffffff; --line: #d8d8dc; --soft: #f1f1ee;
+    --vendor: #e07a1f; --statusline: #8e44ad; --tracker: #2f6fdb; --reader: #2e8b57; --os: #8a8a90;
+    --live: #2e8b57; --changed: #c98a00; --new: #1f9d8f; --removed: #c0392b; --problem: #c0392b;
+    --c1: #2f6fdb; --c2: #9a6b2f; --c3: #1f9d8f; --c4: #b03a7a;
+    --j-render: #8e44ad; --j-cq: #d9480f; --j-cxq: #b58900; --j-cph: #5f8a1c; --j-otel: #0a84c6; --j-agg: #1a9a4a;
+    --j-render-bg: #f4ecf8; --j-cq-bg: #fcebe3; --j-cxq-bg: #faf3dc; --j-cph-bg: #eef5e3; --j-otel-bg: #e3f1fa; --j-agg-bg: #e2f5e9; --j-render-vm: #d6336c; --j-cq-vm: #364fc7; --j-otel-vm: #0b7285; --j-agg-vm: #8f5b2e; --j-render-vm-bg: #fdecf2; --j-cq-vm-bg: #e9ecfb; --j-otel-vm-bg: #e3f4f6; --j-agg-vm-bg: #f5ece3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161618; --fg: #ececf0; --muted: #9a9aa2; --card: #212124; --line: #3a3a3f; --soft: #2a2a2e;
+      --vendor: #f0a050; --statusline: #c08ae0; --tracker: #6fa0ff; --reader: #5cc28a; --os: #9a9aa2;
+      --live: #5cc28a; --changed: #e0b040; --new: #4fd0c0; --removed: #e8695c; --problem: #e8695c; --c1: #6fa0ff; --c2: #d4a060; --c3: #4fd0c0; --c4: #e070b0; --j-render: #c58ae6; --j-cq: #ff8a5b; --j-cxq: #e5c04a; --j-cph: #a5cf5e; --j-otel: #5ab8f0; --j-agg: #5cd38a; --j-render-bg: #2e2236; --j-cq-bg: #36241c; --j-cxq-bg: #332d18; --j-cph-bg: #27301a; --j-otel-bg: #18293a; --j-agg-bg: #183022; --j-render-vm: #f06595; --j-cq-vm: #8c9eff; --j-otel-vm: #3bc9db; --j-agg-vm: #d4a373; --j-render-vm-bg: #3a1f2a; --j-cq-vm-bg: #1f2440; --j-otel-vm-bg: #13303a; --j-agg-vm-bg: #33281d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161618; --fg: #ececf0; --muted: #9a9aa2; --card: #212124; --line: #3a3a3f; --soft: #2a2a2e;
+    --vendor: #f0a050; --statusline: #c08ae0; --tracker: #6fa0ff; --reader: #5cc28a; --os: #9a9aa2;
+    --live: #5cc28a; --changed: #e0b040; --new: #4fd0c0; --removed: #e8695c; --problem: #e8695c; --c1: #6fa0ff; --c2: #d4a060; --c3: #4fd0c0; --c4: #e070b0; --j-render: #c58ae6; --j-cq: #ff8a5b; --j-cxq: #e5c04a; --j-cph: #a5cf5e; --j-otel: #5ab8f0; --j-agg: #5cd38a; --j-render-bg: #2e2236; --j-cq-bg: #36241c; --j-cxq-bg: #332d18; --j-cph-bg: #27301a; --j-otel-bg: #18293a; --j-agg-bg: #183022; --j-render-vm: #f06595; --j-cq-vm: #8c9eff; --j-otel-vm: #3bc9db; --j-agg-vm: #d4a373; --j-render-vm-bg: #3a1f2a; --j-cq-vm-bg: #1f2440; --j-otel-vm-bg: #13303a; --j-agg-vm-bg: #33281d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 28px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 28px; }
+  h2 { margin: 44px 0 6px; font-size: 21px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
+  h3 { margin: 22px 0 8px; font-size: 16px; color: var(--muted); }
+  .lead { color: var(--muted); margin: 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; }
+  nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 0; }
+  nav a { text-decoration: none; padding: 4px 10px; border: 1px solid var(--line); border-radius: 20px; font-size: 13px; color: var(--fg); background: var(--card); }
+  /* legend */
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--muted); }
+  .legend .sw { display: inline-block; width: 22px; height: 14px; border-radius: 4px; margin-right: 6px; vertical-align: -2px; border: 2px solid; background: var(--card); }
+  /* flows */
+  .lane { margin: 10px 0; padding: 10px 10px 4px; border-radius: 8px; background: var(--soft); }
+  .lane > .tag { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .flow { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .fork { display: flex; flex-direction: column; gap: 6px; padding-left: 8px; border-left: 2px solid var(--line); }
+  .fork > .flow { margin: 0; }
+  .node { background: var(--card); border: 2px solid var(--os); border-radius: 7px; padding: 4px 9px; font: 12.5px/1.35 ui-monospace, Menlo, monospace; max-width: 300px; }
+  .node small { display: block; font: 11px/1.3 -apple-system, system-ui, sans-serif; color: var(--muted); }
+  .node.vendor { border-color: var(--vendor); } .node.statusline { border-color: var(--statusline); }
+  .node.tracker { border-color: var(--tracker); } .node.reader { border-color: var(--reader); }
+  .node.os { border-color: var(--os); border-style: dashed; }
+  .node.db { border-radius: 14px 14px 7px 7px; border-width: 2px 2px 4px; }
+  .node.dbc { border-radius: 14px 14px 7px 7px; border-width: 2px 2px 4px; border-style: dashed; border-color: var(--new); }
+  .node.removed { text-decoration: line-through; opacity: .75; box-shadow: 0 0 0 2px var(--removed); }
+  .node.new { box-shadow: 0 0 0 3px var(--new); }
+  .node.changed { box-shadow: 0 0 0 3px var(--changed); }
+  .badge { display: inline-block; font: 600 10px/1 -apple-system, system-ui, sans-serif; padding: 3px 5px; border-radius: 4px; color: #fff; margin-left: 4px; vertical-align: 1px; text-decoration: none; }
+  .b-new { background: var(--new); } .b-partial { background: var(--changed); } .b-planned { background: var(--muted); } .b-broken { background: var(--problem); } .b-changed { background: var(--changed); } .b-removed { background: var(--removed); } .b-problem { background: var(--problem); } .b-live { background: var(--live); }
+  .arr { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .arr i { font-style: normal; font-size: 11px; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0 6px; margin: 0 2px; }
+  .note { font-size: 12.5px; color: var(--muted); margin: 2px 0 8px; }
+  .problem { color: var(--problem); font-weight: 600; }
+  /* tables */
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  code { font: 12.5px ui-monospace, Menlo, monospace; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+  /* svg */
+  svg text { fill: var(--fg); font: 13px -apple-system, system-ui, sans-serif; }
+  svg .small { fill: var(--muted); font: 11.5px -apple-system, system-ui, sans-serif; }
+  svg .mono { font: 12px ui-monospace, Menlo, monospace; }
+  svg .mach { fill: var(--soft); stroke: var(--line); stroke-width: 1.5; }
+  svg .dbx { fill: var(--card); stroke: var(--tracker); stroke-width: 2; }
+  svg .dbc { fill: var(--card); stroke: var(--new); stroke-width: 2; stroke-dasharray: 6 4; }
+  svg .job rect { stroke-width: 2.2; }
+  svg .job .jt { font-weight: 700; }
+  svg .render rect { fill: var(--j-render-bg); stroke: var(--j-render); } svg .render .jt { fill: var(--j-render); }
+  svg .cq rect { fill: var(--j-cq-bg); stroke: var(--j-cq); } svg .cq .jt { fill: var(--j-cq); }
+  svg .cxq rect { fill: var(--j-cxq-bg); stroke: var(--j-cxq); } svg .cxq .jt { fill: var(--j-cxq); }
+  svg .cph rect { fill: var(--j-cph-bg); stroke: var(--j-cph); } svg .cph .jt { fill: var(--j-cph); }
+  svg .otel rect { fill: var(--j-otel-bg); stroke: var(--j-otel); } svg .otel .jt { fill: var(--j-otel); }
+  svg .agg rect { fill: var(--j-agg-bg); stroke: var(--j-agg); } svg .agg .jt { fill: var(--j-agg); }
+  svg .fl { fill: none; stroke-width: 2.2; } svg .fl.wide { stroke-width: 3; }
+  svg .fl.render { stroke: var(--j-render); } svg .fl.cq { stroke: var(--j-cq); } svg .fl.cxq { stroke: var(--j-cxq); }
+  svg .fl.cph { stroke: var(--j-cph); } svg .fl.otel { stroke: var(--j-otel); } svg .fl.agg { stroke: var(--j-agg); }
+  svg .render-vm rect { fill: var(--j-render-vm-bg); stroke: var(--j-render-vm); } svg .render-vm .jt { fill: var(--j-render-vm); } svg .fl.render-vm { stroke: var(--j-render-vm); }
+  svg .cq-vm rect { fill: var(--j-cq-vm-bg); stroke: var(--j-cq-vm); } svg .cq-vm .jt { fill: var(--j-cq-vm); } svg .fl.cq-vm { stroke: var(--j-cq-vm); }
+  svg .otel-vm rect { fill: var(--j-otel-vm-bg); stroke: var(--j-otel-vm); } svg .otel-vm .jt { fill: var(--j-otel-vm); } svg .fl.otel-vm { stroke: var(--j-otel-vm); }
+  svg .agg-vm rect { fill: var(--j-agg-vm-bg); stroke: var(--j-agg-vm); } svg .agg-vm .jt { fill: var(--j-agg-vm); } svg .fl.agg-vm { stroke: var(--j-agg-vm); }
+  svg .db1 { fill: var(--card); stroke: var(--c1); stroke-width: 2; }
+  svg .db2 { fill: var(--card); stroke: var(--c2); stroke-width: 2; }
+  svg .db3 { fill: var(--card); stroke: var(--c3); stroke-width: 2; stroke-dasharray: 6 4; }
+  svg .db4 { fill: var(--card); stroke: var(--c4); stroke-width: 2; stroke-dasharray: 6 4; }
+  .cat { display: inline-block; padding: 1px 8px; border-radius: 10px; color: #fff; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+  .c1 { background: var(--c1); } .c2 { background: var(--c2); } .c3 { background: var(--c3); } .c4 { background: var(--c4); }
+  .node.k1 { border-color: var(--c1); } .node.k2 { border-color: var(--c2); }
+  .node.k3 { border-color: var(--c3); border-style: dashed; } .node.k4 { border-color: var(--c4); border-style: dashed; }
+  .lane.jl-render { border-left: 6px solid var(--j-render); background: var(--j-render-bg); } .lane.jl-render > .tag { color: var(--j-render); }
+  .lane.jl-cq { border-left: 6px solid var(--j-cq); background: var(--j-cq-bg); } .lane.jl-cq > .tag { color: var(--j-cq); }
+  .lane.jl-otel { border-left: 6px solid var(--j-otel); background: var(--j-otel-bg); } .lane.jl-otel > .tag { color: var(--j-otel); }
+  .lane.jl-agg { border-left: 6px solid var(--j-agg); background: var(--j-agg-bg); } .lane.jl-agg > .tag { color: var(--j-agg); }
+  .lane.jl-render-vm { border-left: 6px solid var(--j-render-vm); background: var(--j-render-vm-bg); } .lane.jl-render-vm > .tag { color: var(--j-render-vm); }
+  .lane.jl-cq-vm { border-left: 6px solid var(--j-cq-vm); background: var(--j-cq-vm-bg); } .lane.jl-cq-vm > .tag { color: var(--j-cq-vm); }
+  .lane.jl-otel-vm { border-left: 6px solid var(--j-otel-vm); background: var(--j-otel-vm-bg); } .lane.jl-otel-vm > .tag { color: var(--j-otel-vm); }
+  .lane.jl-agg-vm { border-left: 6px solid var(--j-agg-vm); background: var(--j-agg-vm-bg); } .lane.jl-agg-vm > .tag { color: var(--j-agg-vm); }
+  .lane.l1 { border-left: 5px solid var(--c1); } .lane.l2 { border-left: 5px solid var(--c2); }
+  .lane.l3 { border-left: 5px solid var(--c3); } .lane.l4 { border-left: 5px solid var(--c4); }
+  svg .edge { stroke: var(--fg); stroke-width: 1.8; fill: none; }
+  svg .edge2 { stroke: var(--new); stroke-width: 2.4; fill: none; }
+  svg .axis { stroke: var(--muted); stroke-width: 1.5; }
+  svg .zero { fill: var(--new); }
+  svg .val { fill: var(--tracker); }
+  ol.decisions li { margin: 6px 0; }
+  .check { display: grid; grid-template-columns: 26px 1fr; gap: 4px 6px; align-items: start; }
+  pre { overflow-x: auto; font-size: 12.5px; line-height: 1.45; margin: 0; }
+  .tl td:first-child { white-space: nowrap; font-weight: 600; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>agent-usage-tracker · design</h1>
+  <p class="lead">Records Claude Code usage over time - quota percent, tokens, Claude Code's own $ - on the MacBook and the VM <code>H-Frank-1</code>, in four categories of data. Claude only; Codex keeps its own jobs (section 13).</p>
+  <div class="card" style="margin-top: 14px">
+    <table class="tl">
+      <tr><td>Status</td><td><b>built</b> 2026-10-10 (5 migration phases, each a dated row in <code>USAGE_DATA_REFERENCE.md</code> §6); decisions P1–P12 validated by Jean on 2026-10-10 (section 11); this page validated by Jean on 2026-10-12</td></tr>
+      <tr><td>Changed 2026-10-12</td><td>P13 <code>data/claude/intermediary.db</code> replaces <code>intermediary/claude/</code>; P14 one aggregates file per machine in <code>data/claude/aggregates/</code>, replacing <code>central/</code> (section 11); built the same day, 18:45 UTC (<code>migrate_to_target.py data-layout</code>)</td></tr>
+      <tr><td>Two files, one design</td><td><code>design/DESIGN.html</code> (this page, for Jean) and <code>design/DESIGN.md</code> (the same sections, for agents). <b>They change together, section by section.</b> Once everything is implemented, this page becomes the README</td></tr>
+      <tr><td>Words</td><td>the <code>## Vocabulary</code> table of <code>AGENTS.md</code></td></tr>
+      <tr><td>History</td><td>the migration plan and the record of the open questions: <code>git show 1ced0c4:design/MIGRATION_PLAN.md</code>, <code>git show 1ced0c4:design/OPEN_QUESTIONS.md</code></td></tr>
+      <tr><td>Open work</td><td><code>TODO/</code>, one file per task</td></tr>
+    </table>
+  </div>
+  <nav>
+    <a href="#legend">Legend</a><a href="#categories">1 · Four categories</a><a href="#stored">2 · Where the data lives</a><a href="#cat1">3 · Quotas</a><a href="#cat2">4 · Machine raw</a><a href="#intermediary">5 · intermediary</a><a href="#cat3">6 · Aggregates</a><a href="#contracts">7 · Contracts</a><a href="#jobs">8 · Jobs</a><a href="#status">9 · Status</a><a href="#usage">10 · Install, logs</a><a href="#decisions">11 · Decisions</a><a href="#facts">12 · Facts</a><a href="#codex">13 · Codex</a>
+  </nav>
+
+  <h2 id="legend">Legend</h2>
+  <div class="card">
+    <div class="legend">
+      <span><span class="sw" style="border-color: var(--vendor)"></span>Claude Code / Codex (vendor apps)</span>
+      <span><span class="sw" style="border-color: var(--statusline)"></span>agent-statusline</span>
+      <span><span class="sw" style="border-color: var(--tracker)"></span>agent-usage-tracker (this repo)</span>
+      <span><span class="sw" style="border-color: var(--reader)"></span>readers: auto-apply and any other project (<code>FOR_READERS.md</code>)</span>
+      <span><span class="sw" style="border-color: var(--os); border-style: dashed"></span>scheduler (launchd on the Mac, systemd on the VM) via job-runner</span>
+    </div>
+    <div class="legend" style="margin-top: 10px">
+      <span><span class="cat c1">1</span> <span class="cat c2">2</span> raw (solid border) · <span class="cat c3">3</span> <span class="cat c4">4</span> computed (dashed border): the categories of data, section 1</span>
+      <span>Status (section 9): <span class="badge b-live">LIVE</span> <span class="badge b-partial">PARTIAL</span> <span class="badge b-broken">BROKEN</span> <span class="badge b-planned">PLANNED</span></span>
+      <span>Gates (the only writers): <code>ingest_account_quota.py</code> → <code>account_quotas.db</code>, <code>ingest_session_usage.py</code> → <code>sessions_usages.db</code>, <code>ingest_aggregates.py</code> → <code>aggregates/&lt;machine&gt;.db</code></span>
+    </div>
+  </div>
+
+  <h2 id="categories">1 · The four categories, and the picture</h2>
+  <div class="card">
+    <table>
+      <tr><th>Category</th><th>What</th><th>Raw or computed</th><th>Scope</th><th>Where it lives</th><th>Copies</th></tr>
+      <tr><td><span class="cat c1">1 · Quotas</span></td><td>quota readings (% of the 5h and 7d windows, reset times), failed polls</td><td>raw: lost if not stored</td><td>account-wide, real time</td><td><b>shared</b>: both machines, synced both ways every 2 min</td><td>2</td></tr>
+      <tr><td><span class="cat c2">2 · Machine raw</span></td><td><code>sessions_usages.db</code> (telemetry, statusline session snapshots) and the transcripts</td><td>raw</td><td>one machine</td><td><b>never leaves its machine</b></td><td>1 (accepted)</td></tr>
+      <tr><td><span class="cat c3">3 · Aggregates</span></td><td>Category 2 added up per 5-min slot × machine × folder × entrypoint × model: one table, <code>slots</code></td><td>computed from Category 2</td><td>one machine</td><td>computed on each machine every 5 min; the Mac sends its rows to the VM every 5 min</td><td>2 (Mac's rows)</td></tr>
+      <tr><td><span class="cat c4">4 · Meta-analysis</span></td><td><b>not built here: it belongs to a reader</b> (<code>FOR_READERS.md</code>). Readers need from 1 + 3: $ or tokens per 5-hour window and week (correlating the % with $ or tokens), and past consumption by project, machine, interactive vs scheduled</td><td>computed from 1 + 3</td><td>all machines</td><td>the reader</td><td>—</td></tr>
+    </table>
+    <p class="note">Arrows only go 2 → 3 → 4, and 1 → 4. Category 2 never crosses machines; only Categories 1 and 3 do.</p>
+  </div>
+  <h3 id="picture">The big picture</h3>
+  <p class="note">Bands = the four categories of data. Coloured boxes on the outer sides = the jobs and services, each in its own colour, a different one on each machine (the same job does different things on each); every arrow has the colour of the job or service that moves the data.</p>
+  <div class="card">
+    <svg viewBox="0 0 1400 880" width="100%" role="img" aria-label="MacBook and VM: four bands of data categories, the jobs and services of each machine, and the data flows they manage">
+      <defs>
+        <marker id="k-render" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-render)"/></marker>
+        <marker id="k-cq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-cq)"/></marker>
+        <marker id="k-cxq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-cxq)"/></marker>
+        <marker id="k-cph" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-cph)"/></marker>
+        <marker id="k-otel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-otel)"/></marker>
+        <marker id="k-agg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-agg)"/></marker>
+        <marker id="k-render-vm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-render-vm)"/></marker>
+        <marker id="k-cq-vm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-cq-vm)"/></marker>
+        <marker id="k-otel-vm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-otel-vm)"/></marker>
+        <marker id="k-agg-vm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" style="fill: var(--j-agg-vm)"/></marker>
+      </defs>
+
+      <!-- category bands -->
+      <rect x="0" y="52" width="1400" height="278" rx="8" style="fill: var(--c1); opacity: .09"/>
+      <rect x="0" y="338" width="1400" height="162" rx="8" style="fill: var(--c2); opacity: .10"/>
+      <rect x="0" y="508" width="1400" height="152" rx="8" style="fill: var(--c3); opacity: .10"/>
+      <rect x="0" y="668" width="1400" height="100" rx="8" style="fill: var(--c4); opacity: .10"/>
+      <text x="700" y="72" text-anchor="middle" style="fill: var(--c1); font-weight: 700">1 · QUOTAS</text>
+      <text x="700" y="358" text-anchor="middle" style="fill: var(--c2); font-weight: 700">2 · MACHINE RAW</text>
+      <text x="700" y="528" text-anchor="middle" style="fill: var(--c3); font-weight: 700">3 · AGGREGATES</text>
+      <text x="700" y="688" text-anchor="middle" style="fill: var(--c4); font-weight: 700">4 · META-ANALYSIS</text>
+
+      <!-- machine frames -->
+      <rect x="8" y="8" width="604" height="864" rx="14" style="fill: none; stroke: var(--muted); stroke-width: 1.5"/>
+      <text x="24" y="36" style="font-weight: 700; font-size: 17px">MacBook</text><text class="small" x="108" y="36">chan-lescut-macbook-pro · sleeps, behind NAT</text>
+      <rect x="788" y="8" width="604" height="864" rx="14" style="fill: none; stroke: var(--muted); stroke-width: 1.5"/>
+      <text x="804" y="36" style="font-weight: 700; font-size: 17px">VM</text><text class="small" x="840" y="36">H-Frank-1 · always on</text>
+
+      <!-- ================= MacBook: jobs and services (left) ================= -->
+      <g class="job render"><rect x="20" y="75" width="310" height="56" rx="10"/><text class="jt" x="34" y="95">statusline render</text><text class="small" x="34" y="111">on every render · ← Claude Code's payload</text><text class="small" x="34" y="125">prints the reading → agent-statusline</text></g>
+      <g class="job cq"><rect x="20" y="141" width="310" height="60" rx="10"/><text class="jt" x="34" y="161">job claude-quota</text><text class="small" x="34" y="177">tick every 1 min · polls Anthropic API only</text><text class="small" x="34" y="191">if no fresh reading · sync every 2 min</text></g>
+      <text class="small" x="34" y="244" style="font-style: italic">Codex: its own jobs, outside the four categories</text><text class="small" x="34" y="260" style="font-style: italic">(section 13)</text>
+      <g class="job otel"><rect x="20" y="356" width="310" height="50" rx="10"/><text class="jt" x="34" y="376">service otel</text><text class="small" x="34" y="394">always on · ← Claude Code's telemetry</text></g>
+      <g class="job agg"><rect x="20" y="548" width="310" height="64" rx="10"/><text class="jt" x="34" y="568">job aggregates</text><text class="small" x="34" y="584">every 5 min · reads Category 2, computes</text><text class="small" x="34" y="598">5-min slots, sends the new final ones</text></g>
+      <text class="small" x="34" y="722">no Category 4 on the Mac</text>
+
+      <!-- MacBook: data (inner column) -->
+      <rect class="db1" x="350" y="90" width="250" height="50" rx="9"/><text class="mono" x="362" y="112">claude/account_quotas.db</text><text class="small" x="362" y="130">readings from every machine</text>
+      <rect class="db2" x="350" y="368" width="250" height="44" rx="9"/><text class="mono" x="362" y="388">claude/sessions_usages.db</text><text class="small" x="362" y="404">telemetry, statusline snapshots</text>
+      <rect class="db2" x="350" y="420" width="250" height="56" rx="9"/><text class="mono" x="362" y="440">transcripts</text><text class="small" x="362" y="455">~/.claude/projects</text><text class="small" x="362" y="469">written by Claude Code</text>
+      <rect class="db3" x="350" y="545" width="250" height="62" rx="9"/><text class="mono" x="362" y="565">claude/aggregates/</text><text class="mono" x="362" y="580">chan-lescut-macbook-pro.db</text><text class="small" x="362" y="598">the Mac's own 5-min slots</text>
+
+      <!-- MacBook: arrows -->
+      <path class="fl render" d="M330,100 L347,104" marker-end="url(#k-render)"/>
+      <path class="fl render" d="M330,118 L340,118 L340,386 L347,386" marker-end="url(#k-render)"/>
+      <path class="fl cq" d="M330,170 C342,170 336,128 347,126" marker-end="url(#k-cq)"/>
+      <path class="fl otel" d="M330,398 L347,398" marker-end="url(#k-otel)"/>
+      <path class="fl agg" d="M350,404 C310,430 270,500 262,545" marker-end="url(#k-agg)"/>
+      <path class="fl agg" d="M350,470 C326,490 304,515 298,545" marker-end="url(#k-agg)"/>
+      <path class="fl agg" d="M330,578 L347,578" marker-end="url(#k-agg)"/>
+
+      <!-- ================= between the machines ================= -->
+      <path class="fl cq wide" d="M603,115 L797,115" marker-start="url(#k-cq)" marker-end="url(#k-cq)"/>
+      <text x="700" y="160" text-anchor="middle" style="fill: var(--j-cq); font-weight: 700">sync both ways</text>
+      <text class="small" x="700" y="177" text-anchor="middle">every 2 min</text>
+      <text class="small" x="700" y="193" text-anchor="middle">job claude-quota on the Mac</text>
+      <text class="small" x="700" y="209" text-anchor="middle">(the VM cannot reach the Mac)</text>
+      <text x="700" y="426" text-anchor="middle" style="fill: var(--c2); font-weight: 700">✕ never crosses ✕</text>
+      <text class="small" x="700" y="443" text-anchor="middle">each machine keeps its own</text>
+      <path class="fl agg wide" d="M603,580 C690,580 708,621 797,621" marker-end="url(#k-agg)"/>
+      <text x="700" y="556" text-anchor="middle" style="fill: var(--j-agg); font-weight: 700">send new final slots</text>
+      <text class="small" x="700" y="572" text-anchor="middle">every 5 min · job aggregates</text>
+      <text class="small" x="700" y="645" text-anchor="middle">lands in its own file</text>
+
+      <!-- ================= VM: data (inner column) ================= -->
+      <rect class="db1" x="800" y="90" width="250" height="50" rx="9"/><text class="mono" x="812" y="112">claude/account_quotas.db</text><text class="small" x="812" y="130">readings from every machine</text>
+      <rect class="db2" x="800" y="368" width="250" height="44" rx="9"/><text class="mono" x="812" y="388">claude/sessions_usages.db</text><text class="small" x="812" y="404">telemetry, statusline snapshots</text>
+      <rect class="db2" x="800" y="420" width="250" height="56" rx="9"/><text class="mono" x="812" y="440">transcripts</text><text class="small" x="812" y="455">~/.claude/projects</text><text class="small" x="812" y="469">written by Claude Code</text>
+      <rect class="db3" x="800" y="516" width="250" height="50" rx="9"/><text class="mono" x="812" y="537">claude/aggregates/H-Frank-1.db</text><text class="small" x="812" y="555">the VM's own 5-min slots</text>
+      <rect class="db3" x="800" y="590" width="250" height="62" rx="9"/><text class="mono" x="812" y="609">claude/aggregates/</text><text class="mono" x="812" y="625">chan-lescut-macbook-pro.db</text><text class="small" x="812" y="642">the Mac's slots, as received</text>
+      <rect class="db4" x="800" y="690" width="250" height="52" rx="9"/><text class="mono" x="812" y="712">a reader's own data</text><text class="small" x="812" y="730">another project, from Categories 1 + 3</text>
+
+      <!-- VM: jobs and services (right) -->
+      <g class="job render-vm"><rect x="1070" y="75" width="310" height="56" rx="10"/><text class="jt" x="1084" y="95">statusline render</text><text class="small" x="1084" y="111">VM sessions · ← Claude Code's payload</text><text class="small" x="1084" y="125">prints the reading → agent-statusline</text></g>
+      <g class="job cq-vm"><rect x="1070" y="141" width="310" height="60" rx="10"/><text class="jt" x="1084" y="161">job claude-quota</text><text class="small" x="1084" y="177">tick every 1 min · polls Anthropic API only</text><text class="small" x="1084" y="191">if no fresh reading (waits longer than the Mac)</text></g>
+      <text class="small" x="1084" y="244" style="font-style: italic">no Codex on the VM</text>
+      <g class="job otel-vm"><rect x="1070" y="356" width="310" height="50" rx="10"/><text class="jt" x="1084" y="376">service otel</text><text class="small" x="1084" y="394">always on · ← Claude Code's telemetry</text></g>
+      <g class="job agg-vm"><rect x="1070" y="516" width="310" height="54" rx="10"/><text class="jt" x="1084" y="536">job aggregates</text><text class="small" x="1084" y="554">every 5 min · reads the VM's Category 2</text></g>
+      <g><rect x="1070" y="688" width="310" height="56" rx="10" style="fill: var(--card); stroke: var(--muted); stroke-dasharray: 6 4"/><text class="jt" x="1084" y="708" style="fill: var(--muted)">a reader</text><text class="small" x="1084" y="724">another project, its own job (FOR_READERS.md)</text><text class="small" x="1084" y="738">reads Categories 1 + 3</text></g>
+
+      <!-- VM: arrows -->
+      <path class="fl render-vm" d="M1070,100 L1053,104" marker-end="url(#k-render-vm)"/>
+      <path class="fl render-vm" d="M1070,118 L1060,118 L1060,386 L1053,386" marker-end="url(#k-render-vm)"/>
+      <path class="fl cq-vm" d="M1070,170 C1058,170 1064,128 1053,126" marker-end="url(#k-cq-vm)"/>
+      <path class="fl otel-vm" d="M1070,398 L1053,398" marker-end="url(#k-otel-vm)"/>
+      <path class="fl agg-vm" d="M1050,404 C1100,425 1160,470 1170,514" marker-end="url(#k-agg-vm)"/>
+      <path class="fl agg-vm" d="M1050,470 C1090,485 1125,500 1135,514" marker-end="url(#k-agg-vm)"/>
+      <path class="fl agg-vm" d="M1070,541 L1053,541" marker-end="url(#k-agg-vm)"/>
+
+      <!-- readers -->
+      <text class="small" x="24" y="800" style="font-weight: 600">READ BY</text>
+      <text x="24" y="822" style="fill: var(--statusline)">agent-statusline</text><text class="small" x="150" y="822">← what statusline render prints</text>
+      <text x="24" y="846" style="fill: var(--reader)">auto-apply</text><text class="small" x="150" y="846">← claude/account_quotas.db (view latest)</text>
+      <text class="small" x="804" y="800" style="font-weight: 600">READ BY</text>
+      <text x="804" y="822" style="fill: var(--reader)">readers, graphs (FOR_READERS.md)</text>
+      <text class="small" x="804" y="846">← Categories 1 and 3</text>
+    </svg>
+    <div class="legend" style="margin-top: 10px"><b style="color: var(--fg)">MacBook</b>
+      <span><span class="sw jsw" style="border-color: var(--j-render); background: var(--j-render)"></span>statusline render · every render</span>
+      <span><span class="sw jsw" style="border-color: var(--j-cq); background: var(--j-cq)"></span>claude-quota · tick 1 min; polls; starts the 2-min sync</span>
+      <span><span class="sw jsw" style="border-color: var(--j-otel); background: var(--j-otel)"></span>otel · always on</span>
+      <span><span class="sw jsw" style="border-color: var(--j-agg); background: var(--j-agg)"></span>aggregates · every 5 min; computes and sends</span>
+    </div>
+    <div class="legend" style="margin-top: 6px"><b style="color: var(--fg)">VM</b>
+      <span><span class="sw jsw" style="border-color: var(--j-render-vm); background: var(--j-render-vm)"></span>statusline render · VM sessions</span>
+      <span><span class="sw jsw" style="border-color: var(--j-cq-vm); background: var(--j-cq-vm)"></span>claude-quota · tick 1 min; backup poller, no sync of its own</span>
+      <span><span class="sw jsw" style="border-color: var(--j-otel-vm); background: var(--j-otel-vm)"></span>otel · always on</span>
+      <span><span class="sw jsw" style="border-color: var(--j-agg-vm); background: var(--j-agg-vm)"></span>aggregates · every 5 min; computes</span>
+    </div>
+    <div class="legend" style="margin-top: 6px">
+      <span><span class="cat c1">1</span> <span class="cat c2">2</span> raw: solid border</span>
+      <span><span class="cat c3">3</span> <span class="cat c4">4</span> computed: dashed border</span>
+    </div>
+  </div>
+
+  <h2 id="stored">2 · Where the data lives</h2>
+  <div class="card">
+    <table>
+      <tr><th>Cat.</th><th>Database</th><th>Table</th><th>One row =</th><th>Unit</th><th>Stated by / computed from</th></tr>
+      <tr><td rowspan="2"><span class="cat c1">1</span></td><td rowspan="2"><code>claude/account_quotas.db</code><br><small>Mac and VM, the same rows</small></td><td><code>account_quotas</code> + view <code>latest</code></td><td>one reading, <b>+ the machine that observed it</b></td><td>% 5h and 7d, reset times</td><td>Anthropic API, statusline</td></tr>
+      <tr><td><code>poll_errors</code></td><td>one failed poll</td><td>—</td><td>—</td></tr>
+      <tr><td rowspan="3"><span class="cat c2">2</span></td><td rowspan="2"><code>claude/sessions_usages.db</code><br><small>each machine, its own</small></td><td><code>session_snapshots</code></td><td>one session's running total, when it changes</td><td>$ (all models together), cache statistics</td><td>Claude Code (statusline)</td></tr>
+      <tr><td><code>telemetry</code> + view <code>telemetry_requests</code></td><td>one telemetry event (the view: one per request)</td><td>tokens + $</td><td>Claude Code (OTLP)</td></tr>
+      <tr><td>transcripts</td><td>Claude Code's own files</td><td>lines</td><td>tokens per request, <code>cost-state</code> per session</td><td>Claude Code (deletes them after 365 days)</td></tr>
+      <tr><td><span class="cat c3">3</span></td><td><code>claude/aggregates/&lt;machine&gt;.db</code><br><small>one file per machine: each machine its own; the VM also keeps the Mac's, as received</small></td><td><code>slots</code></td><td>5-min slot × machine × folder × entrypoint × model</td><td>6 token columns (input, output, cache read, cache write 5m / 1h / unknown) + Claude Code's $ where telemetry has it + tokens without $</td><td>transcripts + telemetry, through <code>intermediary.db</code></td></tr>
+      <tr><td>—</td><td><code>claude/intermediary.db</code><br><small>each machine, local, never sent</small></td><td><code>requests</code>, <code>scans</code>, <code>offsets</code></td><td>one request counted once; one run; one transcript file</td><td>tokens; "complete through" time; how far read</td><td>Category 2; deletable at any time, rebuilt from it (one slow run)</td></tr>
+      <tr><td><span class="cat c4">4</span></td><td colspan="5">not in this project: a reader builds it from Categories 1 + 3 (<code>FOR_READERS.md</code>)</td></tr>
+    </table>
+    <p class="note">Only the gates write a database: <code>ingest_account_quota.py</code>, <code>ingest_session_usage.py</code>, <code>ingest_aggregates.py</code>. Paths under <code>~/opt/agent-usage-tracker/</code> on each machine.</p>
+  </div>
+  <div class="card">
+<pre>~/dev/agent-usage-tracker/          the repo (development: Mac only)
+├── README.md                       a stub, pointing here until the README takes this page over
+├── AGENTS.md                       rules for working on it, the vocabulary
+├── FOR_READERS.md                  how other projects read the data
+├── USAGE_DATA_SOURCES.md           what exists upstream
+├── USAGE_DATA_REFERENCE.md         what is captured, where; §6 change history
+├── design/                         DESIGN.html (this page), DESIGN.md
+├── TODO/                           open work, one file per task; done/
+├── src/                            gates, collectors, usage_db.py;
+│                                   launchd/, systemd/ trigger templates
+├── jobs/                           job-runner entrypoints &lt;job&gt;.sh,
+│                                   dashboard settings &lt;job&gt;.conf
+├── install.sh, uninstall.sh
+├── adhoc_quotas_analysis/          research; the hand-run migrations
+└── tests/                          hermetic bash suite</pre>
+<pre style="margin-top: 14px">~/opt/agent-usage-tracker/          deployed by install.sh (Mac and VM)
+├── src/                            the code
+├── &lt;job&gt;.sh, &lt;job&gt;.conf            claude-quota, aggregates (both);
+│                                   codex-quota, codex-plan-history (Mac)
+├── data/claude/                    account_quotas.db (1),
+│                                   sessions_usages.db (2), intermediary.db
+│   └── aggregates/                 &lt;machine&gt;.db (3): this machine's own;
+│                                   VM: also chan-lescut-macbook-pro.db
+├── data/codex/                     Codex readings and turns (section 13)
+├── data/_archive/                  copies kept by migrations (the old push
+│                                   copies included), their log
+├── state/                          sync/ and push/ watermarks (Mac);
+│                                   transcript_reader/ (Codex offsets)
+├── logs/                           otel-receiver.{log,err};
+│                                   statusline_reader.err (last failure)
+└── com.jeanlescut.agent-usage-     trigger files (symlinked
+    tracker.*.plist / .service        from the OS folders)</pre>
+  </div>
+
+  <h2 id="cat1">3 · Category 1 · Quotas</h2>
+  <h3 id="table1">3.1 · Table <code>account_quotas</code> (and <code>poll_errors</code>)</h3>
+  <div class="card">
+    <table>
+      <tr><th>Column</th><th>Meaning</th></tr>
+      <tr><td><code>ts</code>, <code>dt</code></td><td>when the reading was true: the poll's time, or the statusline session's last API response (<code>observed_at</code>)</td></tr>
+      <tr><td><code>source</code></td><td><code>claude_api</code> (the poller) or <code>claude_statusline</code></td></tr>
+      <tr><td><code>machine</code> <span class="badge b-planned">P1</span></td><td>the machine that took it; NULL for 72 old readings <code>--peer</code> had copied to both machines, whose origin is unknown</td></tr>
+      <tr><td><code>five_hour_pct</code>, <code>five_hour_resets_ts</code>, <code>seven_day_pct</code>, <code>seven_day_resets_ts</code></td><td>the two windows: percent and reset time</td></tr>
+      <tr><td><code>observed_by_session</code>, <code>written_ts</code>, <code>raw</code>, <code>row_hash</code></td><td>the statusline session; when written; the reading as received (with <code>"machine"</code> inside); its identity</td></tr>
+    </table>
+    <p class="note"><b>Dedup</b>: the gate drops only a re-render (same session, <code>observed_at</code>, percents and resets); a new observation with the same percent is kept. <b><code>poll_errors</code> stays on its machine</b> <span class="badge b-planned">P2</span>: a 429 or a 401 concerns one machine's login token.</p>
+  </div>
+  <h3 id="reset">3.2 · View <code>latest</code> and the reset rule <span class="badge b-planned">P5</span></h3>
+  <div class="card">
+    <svg viewBox="0 0 1000 250" width="100%" role="img" aria-label="Timeline: a reading at 10:00 reports 50 percent and a reset at 12:00; after 12:00 the five-hour bar shows 0 percent while the seven-day bar keeps its value">
+      <line class="axis" x1="40" y1="200" x2="960" y2="200"/>
+      <text class="small" x="40" y="225">09:00</text><text class="small" x="230" y="225">10:00</text><text class="small" x="420" y="225">11:00</text><text class="small" x="610" y="225">12:00</text><text class="small" x="800" y="225">13:00</text>
+      <circle cx="250" cy="200" r="7" fill="var(--tracker)"/>
+      <text x="200" y="182" style="font-weight: 600">latest reading</text>
+      <text class="small" x="170" y="166">5h 50% · 7d 20% · 5h resets 12:00</text>
+      <line x1="630" y1="40" x2="630" y2="200" stroke="var(--new)" stroke-width="2" stroke-dasharray="5 4"/>
+      <text x="575" y="34" style="fill: var(--new); font-weight: 600">5h reset_dt</text>
+      <circle cx="830" cy="200" r="7" fill="none" stroke="var(--fg)" stroke-width="2"/>
+      <text x="815" y="182" style="font-weight: 600">now</text>
+      <rect class="val" x="250" y="70" width="380" height="22" rx="4" opacity=".85"/>
+      <text x="262" y="86" style="fill: #fff; font-weight: 600">5h shows 50%</text>
+      <rect class="zero" x="630" y="70" width="320" height="22" rx="4" opacity=".9"/>
+      <text x="642" y="86" style="fill: #fff; font-weight: 600">5h shows 0%</text>
+      <rect class="val" x="250" y="108" width="700" height="22" rx="4" opacity=".55"/>
+      <text x="262" y="124" style="fill: #fff; font-weight: 600">7d keeps 20%: its own reset (Monday 19:00 UTC) has not passed</text>
+    </svg>
+    <table style="margin-top: 8px">
+      <tr><th>For each window (5h, 7d) separately</th><th>Stored in the database</th></tr>
+      <tr><td><code>reset_dt &lt;= now</code> → the view <code>latest</code> reads <b>0%</b> and an empty reset; otherwise the reading. <code>reset_dt</code> is the one the latest reading reported. agent-statusline gets it printed by <code>statusline_payload_reader.py</code>; auto-apply queries the view.</td><td>only real observations, with their reset times (<code>five_hour_resets_ts</code>, <code>seven_day_resets_ts</code>); no predicted rows</td></tr>
+    </table>
+    <table style="margin-top: 8px">
+      <tr><th>Time</th><th>Stored</th><th><code>latest</code> gives</th></tr>
+      <tr><td>10:00</td><td>a reading: 5h 50%, resets 12:00; 7d 20%, resets Monday 19:00</td><td>5h 50% · 7d 20%</td></tr>
+      <tr><td>12:30, no newer reading</td><td>nothing new</td><td><b>5h 0%, no reset time</b> · 7d 20%</td></tr>
+    </table>
+    <p class="note">Columns of <code>latest</code>: <code>ts, dt, source, machine, five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts</code>.</p>
+  </div>
+  <h3 id="sync">3.3 · The sync <span class="badge b-planned">P3</span></h3>
+  <div class="card">
+<pre>Mac                                                          VM
+claude_quota_api_poller.py --sync-with=H-Frank-1
+  stdin  ─▶ the Mac's own new rows (machine = Mac, rowid &gt; M)  ─▶  ingest_account_quota.py --sync-from=chan-lescut-macbook-pro --after=V
+                                                                     1. stores each row through the gate
+  stdout ◀─ the VM's own new rows (machine = VM, rowid &gt; V)    ◀─    2. prints its own rows with rowid &gt; V, then "rowid &lt;max&gt;"
+  stores them through the local gate; saves M and V in state/sync/claude_quotas.json</pre>
+    <table style="margin-top: 10px">
+      <tr><th>Rule</th><th>Why</th></tr>
+      <tr><td>run by the Mac's <code>claude-quota</code> when the last successful sync is 110 s old or more (about every 2 min); one ssh call, both directions</td><td>the VM cannot reach the Mac</td></tr>
+      <tr><td>only a machine's <b>own</b> rows travel, never echoed back; a re-sent row is a no-op (<code>row_hash</code>)</td><td>no loops, safe to resend</td></tr>
+      <tr><td>the two watermarks advance only after both sides succeeded; at most 20,000 rows per call</td><td>a failed sync is resent; a backlog drains over the next runs</td></tr>
+      <tr><td>VM unreachable: the job goes on and polls if needed (last line <code>H-Frank-1 not reached</code>); it fails only when the last successful sync is more than 30 min old</td><td>a lasting break shows on the dashboard</td></tr>
+    </table>
+  </div>
+  <h3 id="sharing">3.4 · Who polls <span class="badge b-planned">P4</span></h3>
+  <div class="card">
+    <table style="margin-bottom: 12px">
+      <tr><th>Poll <code>GET /api/oauth/usage</code> when the newest reading (any machine) is at least…</th><th>a status line on screen here (heartbeat &lt; 90 s)</th><th>idle</th></tr>
+      <tr><td>Mac</td><td>110 s</td><td>300 s</td></tr>
+      <tr><td>VM</td><td>290 s = 110 + 120 (sync) + 60 (tick)</td><td>480 s = 300 + 180</td></tr>
+    </table>
+    <div class="grid2">
+      <table>
+        <tr><th>Situation</th><th>Mac</th><th>VM</th></tr>
+        <tr><td>a Claude session active anywhere</td><td>no</td><td>no</td></tr>
+        <tr><td>everything idle, Mac awake</td><td><b>polls</b> (first)</td><td>no: gets the Mac's reading within 2 min</td></tr>
+        <tr><td>Mac asleep</td><td>—</td><td><b>polls</b></td></tr>
+        <tr><td>VM's token expired (401)</td><td><b>polls</b></td><td>fails, harmless</td></tr>
+        <tr><td>429 on one machine</td><td colspan="2">only that machine waits</td></tr>
+      </table>
+      <table>
+        <tr><th colspan="2">Why they never poll together</th></tr>
+        <tr><td>Mac</td><td>polls when the newest reading from any machine is older than its threshold</td></tr>
+        <tr><td>VM</td><td>same rule, with a threshold longer than the Mac's <b>plus the 2-min sync</b>: by then the Mac's reading has arrived</td></tr>
+        <tr><td>Idle</td><td>polls less often: the reset rule covers window ends</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <h2 id="cat2">4 · Category 2 · Machine raw</h2>
+  <div class="card">
+    <table>
+      <tr><th>Store</th><th>Tables</th><th>Written by</th></tr>
+      <tr><td><code>data/claude/sessions_usages.db</code></td><td><code>session_snapshots</code> (statusline: session cost, cache statistics), <code>telemetry</code> (one row per event, Claude Code's own $), view <code>telemetry_requests</code></td><td><code>ingest_session_usage.py</code>, from <code>statusline_payload_reader.py</code> and <code>telemetry_receiver.py</code> (service <code>otel</code>)</td></tr>
+      <tr><td><code>~/.claude/projects/**/*.jsonl</code></td><td>Claude Code's transcripts</td><td>Claude Code; deleted after 365 days</td></tr>
+    </table>
+    <p class="note">Never sent anywhere. No $ computed by us: the only $ is Claude Code's own (telemetry, snapshots).</p>
+  </div>
+
+  <h2 id="intermediary">5 · intermediary <span class="badge b-planned">P7</span> <span class="badge b-planned">P13</span></h2>
+  <div class="card">
+    <table>
+      <tr><th>Table</th><th>One row =</th><th>Columns</th></tr>
+      <tr><td><code>requests</code></td><td>one API request, counted once (the transcript line with the largest <code>output_tokens</code> per request id)</td><td><code>ts</code> (its first line), <code>dt</code>, <code>request_id</code> (UNIQUE), <code>session_id</code>, <code>folder</code> (cwd), <code>entrypoint</code>, <code>model</code>, the 5 token columns</td></tr>
+      <tr><td><code>scans</code></td><td>one run of the reader</td><td><code>ts</code>, <code>dt</code>, <code>complete_through_ts</code> (= run time − 15 min), <code>requests_added</code></td></tr>
+      <tr><td><code>offsets</code></td><td>one transcript file</td><td><code>path</code>, <code>inode</code>, <code>byte_offset</code>: how far it was read; saved in the same commit as the requests it gave</td></tr>
+    </table>
+    <p class="note"><code>~/opt/agent-usage-tracker/data/claude/intermediary.db</code> on each machine, written only by <code>transcript_reader.py</code>. <b>Deleting it is always safe</b> (with its <code>-wal</code> and <code>-shm</code> files): the next run re-reads every transcript (one slow run, about 1 GB on the Mac) and rebuilds the same rows; slots already written are not touched.</p>
+  </div>
+
+  <h2 id="cat3">6 · Category 3 · Aggregates</h2>
+  <h3 id="slots">6.1 · Table <code>slots</code> <span class="badge b-planned">P8</span></h3>
+  <div class="card">
+    <table>
+      <tr><th>Column</th><th>Type</th><th>Meaning</th></tr>
+      <tr><td><code>ts</code>, <code>dt</code></td><td>INTEGER, TEXT</td><td>slot start, a multiple of 300 s</td></tr>
+      <tr><td><code>machine</code></td><td>TEXT NOT NULL</td><td>where the requests ran</td></tr>
+      <tr><td><code>folder</code></td><td>TEXT NOT NULL</td><td>the session's working directory; <code>''</code> when unknown</td></tr>
+      <tr><td><code>entrypoint</code></td><td>TEXT NOT NULL</td><td>as Claude Code wrote it: <code>cli</code> (interactive), <code>sdk-cli</code> (<code>claude -p</code>), <code>sdk-py</code> (Agent SDK), …; <code>''</code> when unknown</td></tr>
+      <tr><td><code>model</code></td><td>TEXT NOT NULL</td><td>e.g. <code>claude-opus-5-5</code></td></tr>
+      <tr><td><code>requests</code></td><td>INTEGER</td><td>number of requests</td></tr>
+      <tr><td><code>input_tokens</code>, <code>output_tokens</code>, <code>cache_read_tokens</code>, <code>cache_write_5m_tokens</code>, <code>cache_write_1h_tokens</code></td><td>INTEGER</td><td>sums, from the transcripts</td></tr>
+      <tr><td><code>cache_write_unknown_tokens</code> <span class="badge b-planned">P8</span></td><td>INTEGER</td><td>cache writes of telemetry-only requests (telemetry gives no 5m / 1h split)</td></tr>
+      <tr><td><code>usd</code></td><td>REAL, NULL allowed</td><td>sum of Claude Code's own <code>cost_usd</code> over the requests that have one; NULL when none has</td></tr>
+      <tr><td><code>tokens_without_usd</code></td><td>INTEGER</td><td>all tokens of the requests with no telemetry: the part <code>usd</code> does not cover</td></tr>
+      <tr><td><code>written_ts</code></td><td>INTEGER</td><td>when the row was written</td></tr>
+    </table>
+    <p class="note">Key: UNIQUE (<code>ts</code>, <code>machine</code>, <code>folder</code>, <code>entrypoint</code>, <code>model</code>). Written once, when final; never changed. No percent, ever. Example, two real requests:</p>
+<pre>ts 2026-10-10T19:10:00Z · chan-lescut-macbook-pro · /Users/jeanlescut/dev/trading-bot · cli · claude-opus-5-5
+requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 724 · write unknown 0 · usd 0.1416 (0.0686 + 0.0730) · without usd 0</pre>
+  </div>
+  <h3 id="build">6.2 · How a slot is built (job <code>aggregates</code>, every 5 min)</h3>
+  <div class="card">
+<pre>1. transcript_reader.py: new transcript lines → intermediary requests, + a scan: complete_through = now − 15 min
+2. every slot that is final and not yet written:
+     transcript requests ── LEFT JOIN telemetry_requests ON request_id ──▶ tokens + usd (or tokens_without_usd)
+   + telemetry-only requests (prompt suggestions, summaries, web search, titles, compaction: 9.2% of the $)
+       placed by their event time; folder and entrypoint from the same session's transcript requests;
+       their cache writes → cache_write_unknown_tokens
+3. sum per (slot, machine, folder, entrypoint, model) → ingest_aggregates.py → data/claude/aggregates/&lt;this machine&gt;.db
+4. Mac only: send the new slots to the VM (6.4)</pre>
+    <p class="note">A request belongs to the slot of its first transcript line; a telemetry-only request, to the slot of its event. <b>Final</b> = the slot ended at or before the latest scan's <code>complete_through_ts</code>. All lines of one request are written within 292 s, and telemetry arrives within 556 s (section 12), so 15 min is enough.</p>
+    <table>
+      <tr><th>Mac asleep 22:00 → 08:00</th><th></th></tr>
+      <tr><td>22:00 → 08:00</td><td>nothing written, nothing sent</td></tr>
+      <tr><td>first run at 08:00</td><td>every slot up to 07:45 written and sent</td></tr>
+    </table>
+  </div>
+  <h3 id="gate3">6.3 · The gate <code>ingest_aggregates.py</code> <span class="badge b-planned">P10</span> <span class="badge b-planned">P14</span></h3>
+  <div class="card">
+    <p style="margin: 0">The only writer of <code>data/claude/aggregates/&lt;machine&gt;.db</code>: checks each row (columns, types, no percent, and <code>machine</code> = the file's machine), then <code>INSERT OR IGNORE</code> on the key. Used by step 3 locally (this machine's file), and on the VM by the receiver (<code>--machine NAME</code> writes <code>NAME.db</code>, rejecting any row of another machine).</p>
+  </div>
+  <h3 id="send">6.4 · Sending to the VM <span class="badge b-planned">P9</span> <span class="badge b-planned">P14</span></h3>
+  <div class="card">
+    <p style="margin: 0"><code>push_to_central.py</code> sends the slots not sent yet (rowid watermark in <code>state/push/watermarks.json</code>, chunks of 20,000, ssh; the watermark advances only on success). <code>receive_from_machine.py</code> on the VM accepts only <code>slots</code> and writes <code>data/claude/aggregates/chan-lescut-macbook-pro.db</code> through the gate. The VM sends nothing: its slots are already there. The copies of the old push (raw rows, until 2026-10-10) are in <code>data/_archive/</code>, untouched.</p>
+    <table style="margin-top: 10px">
+      <tr><th>Full reset (one file at a time, by hand)</th><th>Then</th></tr>
+      <tr><td>a machine's own <code>aggregates/&lt;machine&gt;.db</code> deleted</td><td>its next <code>aggregates</code> run rebuilds every slot from <code>intermediary.db</code> (and that from the transcripts, if it was deleted too)</td></tr>
+      <tr><td>the VM's copy <code>aggregates/chan-lescut-macbook-pro.db</code> deleted</td><td>the Mac's <code>slots</code> watermark in <code>state/push/watermarks.json</code> set to 0: its next run sends everything again</td></tr>
+    </table>
+  </div>
+
+  <h2 id="contracts">7 · Contracts with other projects</h2>
+  <h3 id="contract">7.1 · agent-statusline <span class="badge b-planned">P6</span></h3>
+  <div class="card">
+    <p class="note">The two projects share exactly two files, each written by one side only; neither writes into the other's tree, and each works without the other.</p>
+    <table>
+      <tr><th>Interface</th><th>Written by</th><th>Read by</th><th>What</th></tr>
+      <tr><td><code>~/opt/agent-usage-tracker/src/statusline_payload_reader.py</code></td><td>this repo (deployed, executable; <code>install.sh</code> writes its first line, this machine's python with <code>-S</code>, and its machine name)</td><td>agent-statusline's Claude provider runs it on every render</td><td>takes the raw payload (which fields it keeps is this repo's business), stores the reading, then prints the account's freshest one - the view <code>latest</code>: any session, poller or machine, the reset rule applied - as one line of six <code>\x1c</code>-separated fields, <code>five_pct five_reset week_pct week_reset source observed_at</code>. Always exits 0; no line: the status line shows its own session's reading</td></tr>
+      <tr><td><code>~/opt/agent-statusline/state/heartbeat/{claude,codex}</code></td><td>agent-statusline, every render</td><td><code>claude-quota.sh</code>, <code>codex_quota_api_poller.py</code></td><td>only the mtime: a status line is on screen</td></tr>
+    </table>
+    <p class="note">Without agent-statusline there are no statusline readings: Claude Code runs a single <code>statusLine</code> command. The quota then comes from the poller only, and there are no session snapshots.</p>
+  </div>
+  <h3 id="autoapply">7.2 · auto-apply</h3>
+  <div class="card">
+    <p style="margin: 0"><code>runner/limits.py</code> reads <code>SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, ts FROM latest</code> from <code>account_quotas.db</code>, opened with <code>PRAGMA query_only = ON</code>.</p>
+  </div>
+  <h3 id="readers">7.3 · Every other reader <span class="badge b-planned">P11</span></h3>
+  <div class="card">
+    <p style="margin: 0"><code>FOR_READERS.md</code> is the contract: open with <code>PRAGMA query_only = ON</code> (never a <code>mode=ro</code> URI), read new rows by <code>rowid</code> (synced rows arrive up to 2 min after their <code>ts</code> and <code>written_ts</code>), read the slots of every file in <code>data/claude/aggregates/</code> (one per machine), never attribute a percent to a project, machine or slot. agent-quota-maximizer gets no change: it will be decommissioned.</p>
+  </div>
+  <h3 id="jobrunner">7.4 · job-runner</h3>
+  <div class="card">
+    <p style="margin: 0">Every scheduled step is a job-runner job, <code>com.jeanlescut.agent-usage-tracker.&lt;job&gt;</code>: <code>jobs/&lt;job&gt;.sh</code> sources <code>~/opt/job-runner/lib.sh</code>; its dashboard settings are <code>jobs/&lt;job&gt;.conf</code>, deployed beside it and handed to the dashboard by <code>install.sh</code>. The retired jobs <code>transcripts</code> and <code>push</code> are marked <code>DECOMMISSIONED=1</code> on the dashboard.</p>
+  </div>
+
+  <h2 id="jobs">8 · Jobs and services <span class="badge b-planned">P12</span></h2>
+  <p class="note">Each panel has the colour of its job or service in section 1; box borders show the project (legend at the top) and, for databases, the category.</p>
+  <h3 id="mac">8.1 · MacBook</h3>
+  <div class="card">
+    <div class="lane jl-render"><div class="tag">statusline render · on every render · writes Categories 1 and 2</div>
+      <div class="flow">
+        <div class="node vendor">Claude Code renders its statusline<small>payload on stdin</small></div><span class="arr">→</span>
+        <div class="node statusline">claude-statusline-command.sh<small>agent-statusline</small></div><span class="arr">→</span>
+        <div class="node tracker">statusline_payload_reader.py<small>called directly</small></div>
+        <div class="fork">
+          <div class="flow"><span class="arr">→<i>%</i>→</span><div class="node tracker">ingest_account_quota.py</div><span class="arr">→</span><div class="node db k1">claude/account_quotas.db</div></div>
+          <div class="flow"><span class="arr">→<i>session $</i>→</span><div class="node tracker">ingest_session_usage.py</div><span class="arr">→</span><div class="node db k2">claude/sessions_usages.db<small>session_snapshots · Category 2</small></div></div>
+          <div class="flow"><span class="arr">→<i>prints</i>→</span><div class="node tracker">freshest reading, reset rule applied<small>six fields, view latest</small></div><span class="arr">→</span><div class="node statusline">statusline displays it</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="lane jl-cq"><div class="tag">job claude-quota · tick every 1 min · sync every 2 min · Category 1</div>
+      <div class="flow">
+        <div class="node os">claude-quota.sh</div><span class="arr">→ 1 →</span>
+        <div class="node tracker">sync quotas with the VM<small>every 2 min; ssh; new rows both ways</small></div><span class="arr">→ 2 →</span>
+        <div class="node tracker">claude_quota_api_poller.py<small>only if no machine has a fresh reading</small></div><span class="arr">←</span>
+        <div class="node vendor">GET /api/oauth/usage</div><span class="arr">→<i>%</i>→</span><div class="node db k1">claude/account_quotas.db</div>
+      </div>
+    </div>
+    <div class="lane jl-otel"><div class="tag">service otel · always on · Category 2</div>
+      <div class="flow">
+        <div class="node vendor">Claude Code sends telemetry</div><span class="arr">→</span><div class="node tracker">telemetry_receiver.py</div><span class="arr">→<i>tokens + Claude Code's $ per request</i>→</span><div class="node db k2">claude/sessions_usages.db<small>telemetry</small></div>
+      </div>
+      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<code>TODO/0004</code>).</p>
+    </div>
+    <div class="lane jl-agg"><div class="tag">job aggregates · every 5 min · Category 3</div>
+      <div class="flow">
+        <div class="node os">aggregates.sh</div><span class="arr">→ 1 →</span>
+        <div class="node tracker">transcript_reader.py<small>reads only the new bytes</small></div><span class="arr">←</span>
+        <div class="node db k2">transcripts<small>+ sessions_usages.db (telemetry $)</small></div><span class="arr">→</span>
+        <div class="node db">claude/intermediary.db<small>requests, scans, offsets: local, never sent, rebuildable</small></div><span class="arr">→</span><div class="node db k3">claude/aggregates/chan-lescut-macbook-pro.db<small>slots</small></div><span class="arr">→ 2 →</span>
+        <div class="node tracker">push_to_central.py<small>new Category 3 rows only</small></div><span class="arr">→<i>ssh</i>→</span><div class="node tracker">receive_from_machine.py on the VM</div>
+      </div>
+    </div>
+  </div>
+  <h3 id="vm">8.2 · VM</h3>
+  <div class="card">
+    <div class="lane jl-render-vm"><div class="tag">statusline render · VM sessions · writes Categories 1 and 2</div>
+      <div class="flow">
+        <div class="node vendor">Claude Code (VM)</div><span class="arr">→</span><div class="node statusline">claude-statusline-command.sh</div><span class="arr">→</span><div class="node tracker">statusline_payload_reader.py</div><span class="arr">→</span><div class="node db k1">claude/account_quotas.db</div><span class="arr">+</span><div class="node db k2">claude/sessions_usages.db</div>
+      </div>
+    </div>
+    <div class="lane jl-cq-vm"><div class="tag">job claude-quota · tick every 1 min · the backup poller · Category 1</div>
+      <div class="flow">
+        <div class="node os">claude-quota.sh</div><span class="arr">→</span><div class="node tracker">claude_quota_api_poller.py<small>only if no machine has a fresh reading; waits longer than the Mac + the 2-min sync</small></div><span class="arr">→</span><div class="node db k1">claude/account_quotas.db</div>
+      </div>
+      <p class="note">The VM receives the Mac's readings through the Mac's sync: the VM cannot reach the Mac.</p>
+    </div>
+    <div class="lane jl-otel-vm"><div class="tag">service otel · always on · Category 2</div>
+      <div class="flow"><div class="node tracker">telemetry_receiver.py</div><span class="arr">→</span><div class="node db k2">claude/sessions_usages.db</div></div>
+    </div>
+    <div class="lane jl-agg-vm"><div class="tag">job aggregates · every 5 min · Category 3 · the VM's own</div>
+      <div class="flow">
+        <div class="node os">aggregates.sh</div><span class="arr">→</span><div class="node tracker">transcript_reader.py<small>reads only the new bytes</small></div><span class="arr">←</span><div class="node db k2">VM transcripts</div><span class="arr">→</span><div class="node db">claude/intermediary.db</div><span class="arr">→</span><div class="node db k3">claude/aggregates/H-Frank-1.db</div>
+      </div>
+    </div>
+    <div class="lane jl-agg"><div class="tag">the Mac's job aggregates · on each of its sends · Category 3 · lands in its own folder</div>
+      <div class="flow">
+        <div class="node tracker">receive_from_machine.py<small>on each Mac send</small></div><span class="arr">→ gate →</span><div class="node db k3">claude/aggregates/chan-lescut-macbook-pro.db<small>its own file</small></div>
+    </div>
+    </div>
+    <div class="lane l4"><div class="tag">Category 4 · not in this project: a reader's own job (FOR_READERS.md)</div>
+      <div class="flow">
+        <div class="node db k1">account_quotas.db</div><span class="arr">+</span><div class="node db k3">aggregates/*.db</div><span class="arr">→</span><div class="node reader">a reader<small>reads them, computes its own Category 4</small></div>
+      </div>
+    </div>
+  </div>
+  <h3 id="glance">8.3 · Jobs at a glance</h3>
+  <div class="card">
+    <table>
+      <tr><th>Job (job-runner)</th><th>Category</th><th>Every</th><th>Mac</th><th>VM</th><th>Does</th></tr>
+      <tr><td><code>claude-quota</code></td><td><span class="cat c1">1</span></td><td>tick 60 s, timeout 1 min</td><td>✓ sync + poll if needed</td><td>✓ poll if needed</td><td>sections 3.3, 3.4</td></tr>
+      <tr><td><code>otel</code> (service, always on)</td><td><span class="cat c2">2</span></td><td>—</td><td>✓</td><td>✓</td><td>stores Claude Code's telemetry</td></tr>
+      <tr><td><code>aggregates</code></td><td><span class="cat c3">3</span></td><td>5 min, claim 5 min (no overlap)</td><td>✓ compute + send</td><td>✓ compute</td><td>transcripts → <code>intermediary.db</code> → final slots (6.2); also reads the Codex session files (section 13)</td></tr>
+      <tr><td><code>codex-quota</code>, <code>codex-plan-history</code></td><td>Codex</td><td>60 s, 1 h</td><td>✓</td><td>—</td><td>section 13</td></tr>
+      <tr><td>not a job: the statusline reader</td><td><span class="cat c1">1</span> <span class="cat c2">2</span></td><td>every render</td><td>✓</td><td>✓</td><td>run by agent-statusline (7.1)</td></tr>
+    </table>
+    <p class="note">Mac: 4 jobs + 1 service; VM: 2 jobs + 1 service. Each job's checks are on job-runner's dashboard.</p>
+  </div>
+
+  <h2 id="status">9 · Status (2026-10-12)</h2>
+  <div class="card">
+    <table>
+      <tr><th>Component</th><th>Status</th><th>Note</th></tr>
+      <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
+      <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
+      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; the VM taking over while the Mac sleeps is not observed yet (<code>TODO/0002</code>)</td></tr>
+      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO/0004</code>)</td></tr>
+      <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
+      <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>data/claude/aggregates/chan-lescut-macbook-pro.db</code>, the same rows as the Mac's</td></tr>
+      <tr><td>P13 <code>data/claude/intermediary.db</code>, P14 one aggregates file per machine</td><td><span class="badge b-live">LIVE</span></td><td>since 2026-10-12 18:45 UTC; the slots still equal a separate count of every request (Mac 3,331, VM 41)</td></tr>
+      <tr><td>readers: agent-statusline, auto-apply</td><td><span class="badge b-live">LIVE</span></td><td>the printed line; the view <code>latest</code></td></tr>
+      <tr><td>Category 4</td><td><span class="badge b-planned">PLANNED</span></td><td>a reader's (<code>FOR_READERS.md</code>); this repo's own analysis: <code>adhoc_quotas_analysis/</code></td></tr>
+      <tr><td>Codex: <code>codex-quota</code>, <code>codex-plan-history</code>, its turns (Mac)</td><td><span class="badge b-live">LIVE</span></td><td>outside the four categories; its rows no longer reach the VM (section 13)</td></tr>
+    </table>
+  </div>
+
+  <h2 id="usage">10 · Install, tests, logs, docs</h2>
+  <div class="card">
+<pre>bash install.sh      # needs python3 and job-runner (~/opt/job-runner/lib.sh); LaunchAgents on macOS, systemd --user on Linux
+bash tests/run.sh    # hermetic</pre>
+    <p class="note">VM deploy: rsync the repo to <code>~/dev/agent-usage-tracker</code> there, run its <code>install.sh</code>; never edit code on the VM. Never <code>uninstall.sh</code> for a layout change: a hand-run step of <code>adhoc_quotas_analysis/migrate_to_target.py</code> instead.</p>
+    <table>
+      <tr><th>Something looks wrong in…</th><th>Look at (on that machine)</th></tr>
+      <tr><td>any job: <code>claude-quota</code>, <code>aggregates</code>, <code>codex-*</code></td><td>job-runner's dashboard <code>http://h-frank-1:8097</code> (each check's status and last line; red when a job stops succeeding); the full output of each run in <code>~/opt/job-runner/logs/agent-usage-tracker.&lt;job&gt;/&lt;machine&gt;/</code>, its statuses in <code>~/opt/job-runner/status/agent-usage-tracker.&lt;job&gt;/&lt;machine&gt;.tsv</code></td></tr>
+      <tr><td>the quota shown by the status line</td><td><code>~/opt/agent-usage-tracker/logs/statusline_reader.err</code> (the reader's last failure, with its time and traceback; absent when it never failed), then <code>SELECT * FROM latest</code></td></tr>
+      <tr><td>the sync between the machines</td><td>the Mac's <code>claude-quota</code> runs (its last line says <code>sync ↑n ↓n</code> or <code>H-Frank-1 not reached</code>); <code>state/sync/claude_quotas.json</code> (watermarks, last success)</td></tr>
+      <tr><td>the slots, or their copy on the VM</td><td><code>python3 adhoc_quotas_analysis/migrate_to_target.py check-intermediary</code> (the slots against a separate count); the Mac's <code>aggregates</code> runs (<code>sent n to H-Frank-1</code>); <code>state/push/watermarks.json</code></td></tr>
+      <tr><td>telemetry</td><td><code>~/opt/agent-usage-tracker/logs/otel-receiver.{log,err}</code>; <code>launchctl print gui/$(id -u)/com.jeanlescut.agent-usage-tracker.otel</code> (VM: <code>systemctl --user status</code>)</td></tr>
+      <tr><td>a migration step</td><td><code>~/opt/agent-usage-tracker/data/_archive/migrate_to_target.log</code></td></tr>
+    </table>
+    <table style="margin-top: 12px">
+      <tr><th>File</th><th>For</th></tr>
+      <tr><td><code>USAGE_DATA_SOURCES.md</code></td><td>what usage data exists upstream, for Claude and Codex, in which unit and granularity</td></tr>
+      <tr><td><code>USAGE_DATA_REFERENCE.md</code></td><td>what this repo captures, from where, into which table, and the traps; its §6 is the dated change history</td></tr>
+      <tr><td><code>FOR_READERS.md</code></td><td>how another project reads the data</td></tr>
+      <tr><td><code>adhoc_quotas_analysis/</code></td><td>the research into what the quota percent means (<code>CONCLUSIONS.md</code>)</td></tr>
+    </table>
+    <p class="note">Split out of <code>agent-statusline</code> on 2026-09-30: its git history up to <code>d744951</code> holds this code from 2026-08-31; older history (the original <code>agent-quota-tracker</code>) is below this repo's first commit.</p>
+  </div>
+
+  <h2 id="decisions">11 · Decisions</h2>
+  <div class="card">
+    <p class="note">Proposed by the agent, each validated by Jean: P1–P12 on 2026-10-10, P13–P14 on 2026-10-12; the unnumbered ones decided with Jean along the way. The P-badges above point here.</p>
+    <table>
+      <tr><th>#</th><th>Decision</th><th>Why</th><th>Rejected</th></tr>
+      <tr><td>P1</td><td>a reading carries <code>machine</code>, in its raw JSON (so in <code>row_hash</code>) and a column</td><td>the same reading taken on two machines never collides; a synced row keeps its origin</td><td>labelling old rows by the database holding them: wrong for the 72 <code>--peer</code> copies (NULL instead)</td></tr>
+      <tr><td>P2</td><td><code>poll_errors</code> never synced</td><td>a 429 or a 401 is about one machine's login token</td><td>—</td></tr>
+      <tr><td>P3</td><td>the Mac syncs, the VM is passive; both ways in one ssh call, every 2 min</td><td>the VM cannot reach the Mac (NAT, sleep)</td><td><code>--peer</code> (one-way copies); the push of whole databases (128 MB for the first sync)</td></tr>
+      <tr><td>P4</td><td>thresholds Mac 110 / 300 s, VM 290 / 480 s</td><td>the Mac polls first; the VM only once the Mac's reading could not have arrived</td><td>—</td></tr>
+      <tr><td>P5</td><td>the reset rule in the view <code>latest</code>, applied when read</td><td>the database keeps only observations</td><td>predicted 0% rows; a state file <code>state/quota/claude</code></td></tr>
+      <tr><td>P6</td><td>the reader is executable and prints the line itself</td><td>one process per render (about 24 ms)</td><td>a <code>bin/</code> wrapper + a state file read afterwards</td></tr>
+      <tr><td>P7</td><td>the intermediary tables local and deletable</td><td>everything in it is rebuilt from Category 2</td><td><code>requests</code> kept in <code>sessions_usages.db</code> with a $ computed by us</td></tr>
+      <tr><td>P8</td><td><code>cache_write_unknown_tokens</code></td><td>telemetry gives no 5m / 1h split (6% of cache writes)</td><td>—</td></tr>
+      <tr><td>P9</td><td>the old push copies moved whole to an archive, untouched</td><td>that move is the backup</td><td>—</td></tr>
+      <tr><td>P10</td><td>one gate, <code>ingest_aggregates.py</code>, for every aggregates file</td><td>the same checks for the Mac's own file and the VM's copy</td><td>—</td></tr>
+      <tr><td>P11</td><td>readers read new rows by <code>rowid</code></td><td>synced rows arrive up to 2 min after their <code>ts</code></td><td>by <code>ts</code> or <code>written_ts</code>: misses late rows</td></tr>
+      <tr><td>P12</td><td>one job <code>aggregates</code></td><td>reading, building and sending under one claim: two runs would read the same bytes</td><td>the jobs <code>transcripts</code> and <code>push</code></td></tr>
+      <tr><td>P13</td><td>the intermediary tables in one file, <code>data/claude/intermediary.db</code>, with the offsets as a table (Jean, 2026-10-12)</td><td>everything a machine keeps lives under <code>data/&lt;agent&gt;/</code>; one file to delete for a rebuild; the offsets commit with their requests</td><td>a folder <code>intermediary/claude/</code> with <code>requests.db</code> + <code>offsets.json</code></td></tr>
+      <tr><td>P14</td><td>Category 3 as one file per machine, <code>data/claude/aggregates/&lt;machine&gt;.db</code>, on the VM too (Jean, 2026-10-12)</td><td>a full reset of one machine's slots is deleting one file; one writer machine per file</td><td>the folder <code>central/&lt;machine&gt;/</code> (left from the push of whole databases); one shared file with a <code>machine</code> column (a reset would need a <code>DELETE</code>: insert-only)</td></tr>
+      <tr><td>—</td><td><code>slots</code> is one table, no <code>session_id</code></td><td>sessions are a Category 2 detail; readers need slots</td><td>a <code>session_totals</code> table</td></tr>
+      <tr><td>—</td><td>Category 4 belongs to a reader</td><td>each reader asks its own question</td><td>Category 4 built here every 5 min</td></tr>
+      <tr><td>—</td><td>no $ computed for Claude</td><td>Claude Code states its own $</td><td>tokens × list price</td></tr>
+      <tr><td>—</td><td>the token-expiry gap is accepted (<code>USAGE_DATA_REFERENCE.md</code> §5.8)</td><td>any message opens a 5-hour window at an arbitrary time</td><td>a keepalive message every few hours</td></tr>
+      <tr><td>—</td><td>Codex out of this design (section 13)</td><td>Claude first; Codex's sources differ</td><td>—</td></tr>
+    </table>
+  </div>
+
+  <h2 id="facts">12 · Facts measured for this design (2026-10-10)</h2>
+  <div class="card">
+    <table>
+      <tr><th>Fact</th><th>Value</th></tr>
+      <tr><td>Telemetry lateness (<code>received_ts − ts</code>, 8,090 <code>api_request</code> events)</td><td>≤ 60 s: 8,089; max 556 s; &gt; 15 min: 0</td></tr>
+      <tr><td>Lines of one request in a transcript</td><td>all written within 292 s</td></tr>
+      <tr><td>Telemetry-only requests</td><td>1,228 of 8,091 (9.2% of the $); every one in a session that also has transcript requests</td></tr>
+      <tr><td>Telemetry attributes</td><td>no working directory, no 5m / 1h cache split; has <code>request_id</code>, <code>session.id</code>, <code>model</code>, <code>query_source</code></td></tr>
+      <tr><td>Transcript lines per request (Mac)</td><td>47,204 lines, 22,617 requests: 2.1 per request</td></tr>
+      <tr><td>Readings copied to both machines by <code>--peer</code></td><td>72, now <code>machine</code> NULL</td></tr>
+      <tr><td>A 429 is per login token</td><td>the Mac polled fine 27 times during a VM Retry-After of 3,600 s</td></tr>
+      <tr><td>Oldest transcript (Mac and VM)</td><td>2026-07-30</td></tr>
+      <tr><td>The slots after the migration</td><td>equal to a separate count of every request: Mac 24,004, VM 189</td></tr>
+    </table>
+  </div>
+
+  <h2 id="codex">13 · Not decided: Codex</h2>
+  <div class="card">
+    <p class="note" style="margin-top: 0">Codex runs on the Mac only (not installed on the VM) and keeps its pre-design jobs; nothing in this design may break them. Picking it up is <code>TODO/0007</code>.</p>
+<pre>job codex-quota          tick 1 min ─▶ codex_quota_api_poller.py ◀─ codex app-server (account/rateLimits/read, account/usage/read)
+job codex-plan-history   tick 1 h   ─▶ codex_plan_history_poller.py ◀─ ChatGPT backend (usage/plan_limit_history), once a day
+                                         └─▶ ingest_account_quota.py ─▶ data/codex/account_quotas.db
+job aggregates (Codex part)  5 min  ─▶ transcript_reader.py ◀─ ~/.codex/sessions, ~/.codex/archived_sessions
+                                         └─▶ ingest_session_usage.py ─▶ data/codex/sessions_usages.db (requests, scans)</pre>
+    <table style="margin-top: 10px">
+      <tr><th>Piece</th><th>Notes</th></tr>
+      <tr><td><code>codex-quota</code></td><td>skips while a Codex session file is fresher than 5 min (the session itself writes the quota); exit 10 = skip</td></tr>
+      <tr><td><code>codex-plan-history</code></td><td>once per 24 h after a success, 1 h after a failure; skips without <code>~/.codex/auth.json</code></td></tr>
+      <tr><td>Codex turns</td><td>entrypoint = <code>session_meta.source</code> or <code>subagent</code>; match ccusage's monthly totals (<code>USAGE_DATA_SOURCES.md</code> §4.1)</td></tr>
+      <tr><td><code>requests.usd</code> for Codex</td><td>from <code>usage_db.PRICES</code> (ccusage's $4 / $20 / cached 0.1× for <code>gpt-5.6-sol</code>), NULL for other models: not a number OpenAI states</td></tr>
+    </table>
+    <p class="note">What this design changed for Codex: its rows no longer reach the VM (the push of raw rows is gone), and <code>codex/account_quotas.db</code> stays on the Mac.</p>
+    <table>
+      <tr><th>Category</th><th>Codex, sketch</th></tr>
+      <tr><td><span class="cat c1">1 · Quotas</span></td><td><code>codex/account_quotas.db</code> in the same sync. Codex reset times move and it reports a fake idle countdown (<code>USAGE_DATA_SOURCES.md</code> §5.1, §5.3): the reset rule needs care</td></tr>
+      <tr><td><span class="cat c2">2 · Machine raw</span></td><td>the session files only: no statusline payload captured, no telemetry</td></tr>
+      <tr><td><span class="cat c3">3 · Aggregates</span></td><td>the same <code>slots</code> shape, tokens only (OpenAI states no $); then drop <code>requests.usd</code></td></tr>
+      <tr><td><span class="cat c4">4 · Meta-analysis</span></td><td>a reader's, with Codex rows</td></tr>
+    </table>
+    <p class="note">Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (<code>USAGE_DATA_SOURCES.md</code> §4.3, §4.4); <code>codex-auto-review</code> turns (ccusage calls them <code>gpt-5.6-luna</code>: keep Codex's own name); Codex on the VM or Mac-only.</p>
+  </div>
+
+  <footer>Rules: <code>AGENTS.md</code> · open work: <code>TODO/</code> · readers: <code>FOR_READERS.md</code> · the same design for agents: <code>design/DESIGN.md</code>.</footer>
+</main>
+</body>
+</html>

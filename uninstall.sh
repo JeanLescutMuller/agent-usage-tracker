@@ -2,11 +2,13 @@
 # Removes everything install.sh deploys: the jobs' entrypoints and triggers
 # and the telemetry receiver (LaunchAgents or systemd --user units), the telemetry
 # keys in ~/.claude/settings.json's `env` (only those still holding our
-# values), and the code/state/logs under ~/opt/agent-usage-tracker.
+# values), and the code/state/logs under ~/opt/agent-usage-tracker, and
+# data/<agent>/intermediary.db (local working tables, rebuilt from the
+# transcripts).
 #
-# Deliberately preserves data/ - irreplaceable usage history, not
-# reproducible if deleted - and, on the VM, central/ (every machine's pushed
-# copy). Remove them yourself if you really want them gone.
+# Deliberately preserves the rest of data/ - irreplaceable usage history,
+# not reproducible if deleted; on the VM it holds the Mac's slots too.
+# Remove it yourself if you really want it gone.
 #
 # With this uninstalled, agent-statusline keeps working: its Claude render
 # finds no reader to pipe into (src/statusline_payload_reader.py), and
@@ -66,24 +68,26 @@ step "runtime tree ($RUNTIME)"
 if [ -d "$RUNTIME" ]; then
     # Nothing here is written on every render except the databases under
     # data/ (kept), so a plain rm -rf is enough - no retry loop needed.
-    known_targets="src intermediary state logs"
+    known_targets="src state logs"
     for target in $known_targets; do
         rm -rf "${RUNTIME:?}/$target"
     done
     for job in $JOBS; do
-        rm -f "${RUNTIME:?}/$job.sh"
+        rm -f "${RUNTIME:?}/$job.sh" "${RUNTIME:?}/$job.conf"
     done
-    installed "removed deployed code, state and logs"
+    for agent in claude codex; do
+        rm -f "$RUNTIME/data/$agent/intermediary.db" "$RUNTIME/data/$agent/intermediary.db-wal" "$RUNTIME/data/$agent/intermediary.db-shm"
+    done
+    installed "removed deployed code, state, logs and the intermediary tables"
     # rmdir only succeeds on an empty directory - real history is kept.
+    rmdir "$RUNTIME/data/claude/aggregates" "$RUNTIME/data/codex/aggregates" 2>/dev/null
     rmdir "$RUNTIME/data/claude" "$RUNTIME/data/codex" 2>/dev/null
     rmdir "$RUNTIME/data" 2>/dev/null
     [ -d "$RUNTIME/data" ] && skip "preserved $RUNTIME/data (irreplaceable usage history)"
-    # The central store (on the VM): every machine's pushed history.
-    [ -d "$RUNTIME/central" ] && skip "preserved $RUNTIME/central (every machine's pushed usage history)"
 
     # A known target back already means a live Claude render ran the ingest
     # script mid-uninstall (it mkdirs state/quota/) - not an orphan.
-    orphans="$(find "$RUNTIME" -mindepth 1 -maxdepth 1 ! -name data ! -name central \
+    orphans="$(find "$RUNTIME" -mindepth 1 -maxdepth 1 ! -name data \
         ! -name bin ! -name src ! -name state ! -name logs 2>/dev/null)"
     if [ -n "$orphans" ]; then
         fail "orphan files/dirs under $RUNTIME - not recognized by this script, check by hand:"

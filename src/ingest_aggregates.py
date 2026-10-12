@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""The gate of data/<agent>/aggregates.db (Category 3, design/TARGET_SPEC.md
-§6.3): the only code that writes it, on this machine and, on the VM, into
-another machine's copy (central/<machine>/data/<agent>/aggregates.db,
-through receive_from_machine.py).
+"""The gate of data/<agent>/aggregates/<machine>.db (Category 3,
+design/DESIGN.md §6.3): the only code that writes one, this machine's own
+and, on the VM, the Mac's copy (through receive_from_machine.py).
 
 It checks each `slots` row - every column there, of the right type, ts a
-multiple of 300, counts not negative, a valid machine name, no extra key
-(so never a quota percent: USAGE_DATA_REFERENCE.md §1) - and inserts it
+multiple of 300, counts not negative, the machine of the file it goes into
+(one file per machine, P14), no extra key (so never a quota percent:
+USAGE_DATA_REFERENCE.md §1) - and inserts it
 with INSERT OR IGNORE: a slot is written once, when final, and never
 changes; the same slot sent twice is a no-op.
 """
 import re
+from pathlib import Path
 
 import usage_db
 
@@ -22,7 +23,7 @@ COUNT_COLUMNS = ("requests", "input_tokens", "output_tokens", "cache_read_tokens
 MACHINE_RE = re.compile(r"[A-Za-z0-9-]+")
 
 
-def check(d_slot: dict) -> list:
+def check(d_slot: dict, machine: str) -> list:
     """The row's values in SLOT_COLUMNS order; ValueError when it must not be stored."""
     if not isinstance(d_slot, dict) or set(d_slot) != set(SLOT_COLUMNS):
         raise ValueError(f"a slot has exactly the columns {SLOT_COLUMNS}")
@@ -35,6 +36,8 @@ def check(d_slot: dict) -> list:
         raise ValueError(f"dt {d_slot['dt']!r} is not ts {d_slot['ts']}")
     if not isinstance(d_slot["machine"], str) or not MACHINE_RE.fullmatch(d_slot["machine"]):
         raise ValueError(f"not a machine name: {d_slot['machine']!r}")
+    if d_slot["machine"] != machine:
+        raise ValueError(f"a slot of {d_slot['machine']!r} in the file of {machine!r}")
     for key in ("folder", "entrypoint", "model"):
         if not isinstance(d_slot[key], str):
             raise ValueError(f"{key} is not text: {d_slot[key]!r}")
@@ -46,8 +49,11 @@ def check(d_slot: dict) -> list:
 def add_slots(db, l_slots: list[dict]) -> int:
     """Inserts the slots in one transaction; returns how many were new.
     One bad row rejects the whole batch (ValueError): a slot is never
-    written twice, so a partial batch could not be completed later."""
-    l_values = [check(d) for d in l_slots]
+    written twice, so a partial batch could not be completed later.
+    `db` is an aggregates/<machine>.db (usage_db.open_aggregates): every
+    row must be that machine's."""
+    machine = Path(db.execute("PRAGMA database_list").fetchone()[2]).stem
+    l_values = [check(d, machine) for d in l_slots]
     db.execute("BEGIN IMMEDIATE")
     try:
         n = sum(db.execute(f"INSERT OR IGNORE INTO slots ({', '.join(SLOT_COLUMNS)}) "

@@ -1,9 +1,10 @@
 #!/bin/bash
 # ~/opt/agent-usage-tracker/aggregates.sh: job agent-usage-tracker.aggregates.
-# Requirements (design/TARGET_SPEC.md §6, §8):
-#   - Claude transcripts -> intermediary/ (each request once) -> the final 5-min slots -> data/claude/aggregates.db;
+# Requirements (design/DESIGN.md §6, §8):
+#   - Claude transcripts -> data/claude/intermediary.db (each request once) -> the final 5-min slots ->
+#     data/claude/aggregates/<machine>.db;
 #     Codex session files -> data/codex/sessions_usages.db as before; Mac and VM, each for itself
-#   - the Mac then sends its new slots to the VM (central/chan-lescut-macbook-pro/); the VM sends nothing.
+#   - the Mac then sends its new slots to the VM (aggregates/chan-lescut-macbook-pro.db there); the VM sends nothing.
 #     The VM unreachable: a failure, the slots go with the next run
 #   - every 5 min (Mac StartInterval 300; VM OnUnitActiveSec=5min); incremental (a byte offset per file)
 #   - timeout 5 min, as long as the tick: no overlap, two runs would read the same bytes (claim, lockfile)

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for adhoc_quotas_analysis/migrate_to_target.py, the hand-run steps of
-# design/MIGRATION_PLAN.md. backup: every database copied whole and checked,
+# design/MIGRATION_PLAN.md (git 1ced0c4). backup: every database copied whole and checked,
 # other files kept, _archive and WAL side files left out, a log line per run.
 # Phase 1: the readings both machines hold, the sync's first watermarks, the
 # machine column filled (shared readings NULL), the VM seeded from its
@@ -158,7 +158,7 @@ PY
 out="$(python3 "$MIGRATE" check-intermediary --runtime "$P2")"
 assert_contains "every old request in intermediary/" "$out" "old requests 3, in intermediary 3; missing 0, different 0"
 assert_contains "the slots agree with a separate count" "$out" "slots (4, 373, 0.6, 252), counted (4, 373, 0.6, 252)"
-python3 -c 'import sqlite3, sys; db = sqlite3.connect(sys.argv[1]); db.execute("DELETE FROM requests WHERE request_id = \"r2\""); db.commit()' "$P2/intermediary/claude/requests.db"
+python3 -c 'import sqlite3, sys; db = sqlite3.connect(sys.argv[1]); db.execute("DELETE FROM requests WHERE request_id = \"r2\""); db.commit()' "$P2/data/claude/intermediary.db"
 python3 "$MIGRATE" check-intermediary --runtime "$P2" >/dev/null 2>&1
 assert_status "a request missing from intermediary/: exit 1" 1 $?
 unset AGENT_USAGE_TRACKER_RUNTIME JR_MACHINE_NAME
@@ -216,5 +216,49 @@ assert_contains "re-running: nothing" "$(python3 "$MIGRATE" drop-old-requests --
 mkdir -p "$P5/data/claude" && AGENT_USAGE_TRACKER_RUNTIME="$P5" JR_MACHINE_NAME=m1 python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/src'); import usage_db; usage_db.open_intermediary('claude'); usage_db.open_aggregates('claude')"
 out="$(JR_MACHINE_NAME=m1 python3 "$MIGRATE" check-intermediary --runtime "$P5")"
 assert_contains "check-intermediary after phase 5: the slots half only" "$out" "the old requests table is gone (phase 5)"
+
+section "data-layout (P13, P14): intermediary.db, one aggregates file per machine, no central/"
+# The layout before 2026-10-12, on a "VM" named m1 holding the Mac's slots (machine mac) in central/.
+L="$TMP/layout"
+mkdir -p "$L/intermediary/claude" "$L/data/claude" "$L/central/mac/data/claude" "$L/central/_archive/mac-push-era"
+printf 'old' > "$L/central/_archive/mac-push-era/x.db"
+printf '{"/t/a.jsonl": [11, 400]}' > "$L/intermediary/claude/offsets.json"
+python3 - "$L" "$REPO_ROOT/src" <<'PY2'
+import sqlite3, sys; sys.path.insert(0, sys.argv[2]); import usage_db
+old = sqlite3.connect(f"{sys.argv[1]}/intermediary/claude/requests.db")
+for statement in usage_db.INTERMEDIARY_SCHEMA.split("CREATE TABLE offsets")[0].split(";\n"):
+    if statement.strip(): old.execute(statement)
+old.execute("INSERT INTO requests VALUES (300, 'x', 'r1', 's', '/a', 'cli', 'm', 1, 2, 3, 0, 0)")
+old.execute("INSERT INTO requests VALUES (600, 'x', 'r2', 's', '/a', 'cli', 'm', 1, 2, 3, 0, 0)")
+old.execute("INSERT INTO scans VALUES (900, 'x', 600, 2)"); old.commit()
+def slots(path, machine, l_ts):
+    db = usage_db.connect(usage_db.Path(path), usage_db.AGGREGATES_SCHEMA)
+    for t in l_ts:
+        db.execute("INSERT INTO slots VALUES (?, ?, ?, '/a', 'cli', 'm', 1, 1, 1, 1, 0, 0, 0, NULL, 3, 1)", (t, usage_db.iso(t), machine))
+slots(f"{sys.argv[1]}/data/claude/aggregates.db", "m1", (300, 600))
+slots(f"{sys.argv[1]}/central/mac/data/claude/aggregates.db", "mac", (900,))
+PY2
+out="$(MIGRATE_SKIP_BUSY_CHECK=1 JR_MACHINE_NAME=m1 python3 "$MIGRATE" data-layout --runtime "$L" 2>&1)"
+assert_contains "the intermediary tables copied, counts equal" "$out" "requests 2, scans 1, offsets 1"
+assert_eq "...into data/claude/intermediary.db" "2|1|/t/a.jsonl 11 400" "$(qq "$L/data/claude/intermediary.db" "SELECT (SELECT COUNT(*) FROM requests) || '|' || (SELECT COUNT(*) FROM scans) || '|' || (SELECT path || ' ' || inode || ' ' || byte_offset FROM offsets)")"
+assert_file_missing "intermediary/ gone" "$L/intermediary"
+assert_contains "...moved whole into data/_archive/" "$(ls "$L/data/_archive")" "intermediary-pre-data-layout-"
+assert_eq "this machine's slots in aggregates/m1.db, same rowids" "1	300
+2	600" "$(qq "$L/data/claude/aggregates/m1.db" "SELECT rowid, ts FROM slots ORDER BY rowid")"
+assert_eq "the Mac's in aggregates/mac.db" "mac	900" "$(qq "$L/data/claude/aggregates/mac.db" "SELECT machine, ts FROM slots")"
+assert_file_missing "the old aggregates.db gone" "$L/data/claude/aggregates.db"
+assert_file_missing "central/ gone" "$L/central"
+assert_file_exists "the old push copies in data/_archive/central-push-era/" "$L/data/_archive/central-push-era/mac-push-era/x.db"
+assert_contains "a copy of each aggregates file first" "$(ls "$L/data/_archive")" "central__mac__data__claude__aggregates.db.pre-data-layout-"
+out="$(MIGRATE_SKIP_BUSY_CHECK=1 JR_MACHINE_NAME=m1 python3 "$MIGRATE" data-layout --runtime "$L" 2>&1)"
+assert_contains "re-running: nothing to move" "$out" "data/claude/aggregates.db: absent (already moved)"
+L2="$TMP/layout2"
+mkdir -p "$L2/data/claude"
+AGENT_USAGE_TRACKER_RUNTIME="$L2" python3 -c "import sys; sys.path.insert(0, '$REPO_ROOT/src'); import usage_db
+db = usage_db.connect(usage_db.Path('$L2/data/claude/aggregates.db'), usage_db.AGGREGATES_SCHEMA)
+db.execute(\"INSERT INTO slots VALUES (300, 'x', 'm2', '', '', 'm', 1, 1, 1, 1, 0, 0, 0, NULL, 3, 1)\")"
+th_run env MIGRATE_SKIP_BUSY_CHECK=1 JR_MACHINE_NAME=m1 python3 "$MIGRATE" data-layout --runtime "$L2"
+assert_status "a file holding another machine's slots: refused" 1 "$TH_STATUS"
+assert_file_exists "...and left in place" "$L2/data/claude/aggregates.db"
 
 harness_summary

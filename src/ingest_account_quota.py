@@ -25,7 +25,7 @@ line, inserted with the line itself as `raw`:
     ingest_account_quota.py --agent claude [--no-dedup] < rows.jsonl
 prints {"inserted": n, "duplicate": n, "redundant": n, "rejected": n}.
     ingest_account_quota.py --agent claude --sync-from=MACHINE --after=ROWID
-is the other side of the 2-min sync (design/TARGET_SPEC.md §3.3), run over
+is the other side of the 2-min sync (design/DESIGN.md §3.3), run over
 ssh by MACHINE's claude_quota_api_poller.py --sync-with: stdin holds
 MACHINE's own new readings, one {"raw", "machine"} line each, stored here
 (no dedup: the sender already deduplicated); then it prints this machine's

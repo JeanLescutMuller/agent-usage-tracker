@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Category 3 (design/TARGET_SPEC.md §6.2): the final 5-min slots, into
-data/claude/aggregates.db. The `aggregates` job's command, every 5 min:
-  1. transcript_reader.py: new transcript lines -> intermediary/claude/
+"""Category 3 (design/DESIGN.md §6.2): the final 5-min slots, into
+data/claude/aggregates/<this machine>.db. The `aggregates` job's command,
+every 5 min:
+  1. transcript_reader.py: new transcript lines -> data/claude/intermediary.db
      (each request once) + a scan "complete through now - 15 min";
   2. every slot that is final and not written yet: the transcript requests
      (LEFT JOIN telemetry on request_id: Claude Code's own cost_usd), plus
@@ -10,14 +11,14 @@ data/claude/aggregates.db. The `aggregates` job's command, every 5 min:
      folder and entrypoint of the same session's transcript requests and
      their cache writes as cache_write_unknown_tokens (telemetry gives no
      5m / 1h split); summed per (slot, machine, folder, entrypoint, model);
-  3. handed to ingest_aggregates.py, the only writer of aggregates.db;
-  4. with --send-to=HOST (the Mac): every slot not sent yet goes to HOST's
-     central/<machine>/ copy (push_to_central.py). A failed send is retried
+  3. handed to ingest_aggregates.py, the only writer of the aggregates files;
+  4. with --send-to=HOST (the Mac): every slot not sent yet goes to the
+     file of the same name on HOST (push_to_central.py). A failed send is retried
      by the next run (exit 1 meanwhile: the job shows it).
 
 A request belongs to the slot of its first transcript line. A slot is
 final once it ended at or before the latest scan's complete_through_ts:
-every request that started in it is then in intermediary/, and telemetry
+every request that started in it is then in intermediary.db, and telemetry
 arrives within seconds (none later than 556 s in 8,090 events, measured
 2026-10-10). A slot is written once and never changes; the next run starts
 after the last slot written on this machine, so a slot with no request is

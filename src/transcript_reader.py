@@ -4,18 +4,18 @@ included) and Codex's session files (~/.codex/sessions and
 archived_sessions): one row per API request (Claude) or per turn (Codex):
 when it happened, its session, execution folder (cwd), entrypoint (cli =
 interactive), model and token counts.
-  - Claude (since 2026-10, design/TARGET_SPEC.md §5): into
-    intermediary/claude/requests.db (tables `requests`, `scans`), the local
-    working tables aggregate_slots.py turns into 5-min slots. Written here
-    directly, not through a gate: intermediary/ is not data, never sent,
-    and deleting it is always safe (the next run reads everything again).
+  - Claude (since 2026-10, design/DESIGN.md §5): into
+    data/claude/intermediary.db (tables `requests`, `scans`, `offsets`), the
+    local working tables aggregate_slots.py turns into 5-min slots. Written
+    here directly, not through a gate: it is not data, never sent, and
+    deleting it is always safe (the next run reads everything again).
     No USD (no $ computed by us) and no machine (always this one).
   - Codex (unchanged, out of the first target): through ingest_session_usage.py
     into data/codex/sessions_usages.db, with the USD of usage_db.PRICES.
 
 Run every 5 minutes by the `aggregates` job, from aggregate_slots.py.
-Incremental: a byte offset per file (intermediary/claude/offsets.json;
-Codex: state/transcript_reader/codex_offsets.json) means a run with nothing
+Incremental: a byte offset per file (the table `offsets`, committed with
+the requests it gave; Codex: state/transcript_reader/codex_offsets.json) means a run with nothing
 new reads nothing; a replaced or truncated file is read again from the start.
 
 Insert-only, so a request is stored once, when complete. A request is
@@ -59,7 +59,6 @@ import ingest_session_usage
 import usage_db
 
 PROJECTS_DIR = Path(os.environ.get("AGENT_USAGE_TRACKER_TRANSCRIPTS") or Path.home() / ".claude" / "projects")
-OFFSETS_FILE = usage_db.intermediary_dir("claude") / "offsets.json"   # deleted with intermediary/: all read again
 CODEX_DIRS = [Path(p) for p in (os.environ.get("AGENT_USAGE_TRACKER_CODEX_SESSIONS") or "").split(":") if p] or \
     [Path.home() / ".codex" / "sessions", Path.home() / ".codex" / "archived_sessions"]
 CODEX_OFFSETS_FILE = usage_db.RUNTIME_DIR / "state" / "transcript_reader" / "codex_offsets.json"
@@ -226,10 +225,8 @@ def main() -> str:
     started = time.time()
     now = int(started)
     complete_before = now - FINAL_AFTER_SECONDS
-    try:
-        d_offsets = json.loads(OFFSETS_FILE.read_text())
-    except (OSError, ValueError):
-        d_offsets = {}
+    db = usage_db.open_intermediary("claude")
+    d_offsets = {path: (ino, offset) for path, ino, offset in db.execute("SELECT path, inode, byte_offset FROM offsets")}
     d_found, d_new_offsets, n_read, n_bytes = {}, {}, 0, 0
     l_stack = [str(PROJECTS_DIR)] if PROJECTS_DIR.is_dir() else []
     while l_stack:
@@ -248,7 +245,6 @@ def main() -> str:
                 n_bytes += st.st_size - offset
                 offset = read_file(entry.path, offset, complete_before, d_found)
             d_new_offsets[entry.path] = (st.st_ino, offset)
-    db = usage_db.open_intermediary("claude")
     db.execute("BEGIN IMMEDIATE")
     try:
         n_added = 0
@@ -259,16 +255,14 @@ def main() -> str:
                                   [d_req[k] for k in INTERMEDIARY_COLUMNS]).rowcount
         db.execute("INSERT INTO scans (ts, dt, complete_through_ts, requests_added) VALUES (?,?,?,?)",
                    (now, usage_db.iso(now), complete_before, n_added))
+        # The offsets in the same commit: a crash leaves both as they were.
+        db.execute("DELETE FROM offsets")
+        db.executemany("INSERT INTO offsets (path, inode, byte_offset) VALUES (?,?,?)",
+                       [(path, ino, offset) for path, (ino, offset) in d_new_offsets.items()])
         db.execute("COMMIT")
     except BaseException:
         db.execute("ROLLBACK")
         raise
-    # Offsets only after the commit: a crash in between re-reads, and the
-    # re-read requests are skipped as already stored.
-    OFFSETS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = OFFSETS_FILE.with_name(f"{OFFSETS_FILE.name}.tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(d_new_offsets))
-    tmp.replace(OFFSETS_FILE)
     codex = read_codex(now)
     summary = (f"{usage_db.iso(now)} claude: files read {n_read}, {n_bytes / 1e6:.1f} MB, requests added {n_added}; "
                f"{codex}; {time.time() - started:.2f} s")

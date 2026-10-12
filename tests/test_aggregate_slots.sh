@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for src/aggregate_slots.py and its gate src/ingest_aggregates.py
-# (Category 3, design/TARGET_SPEC.md §6): final slots only, transcript
+# (Category 3, design/DESIGN.md §6): final slots only, transcript
 # requests with telemetry's cost, telemetry-only requests in their session's
 # folder with cache writes of unknown duration, tokens_without_usd, each slot
 # written once, the gate's checks. Fixture rows only; no transcript is read.
@@ -10,7 +10,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/harness.sh"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-slots.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 RT="$TMP/rt"
-ADB="$RT/data/claude/aggregates.db"
+ADB="$RT/data/claude/aggregates/m1.db"
 export AGENT_USAGE_TRACKER_RUNTIME="$RT" JR_MACHINE_NAME=m1
 S1=11111111-1111-1111-1111-111111111111 S2=22222222-2222-2222-2222-222222222222 SX=99999999-9999-9999-9999-999999999999
 
@@ -57,6 +57,8 @@ section "the gate"
 good="dict(ts=600, dt=usage_db.iso(600), machine='m1', folder='', entrypoint='', model='x', requests=1, input_tokens=1, output_tokens=1, cache_read_tokens=0, cache_write_5m_tokens=0, cache_write_1h_tokens=0, cache_write_unknown_tokens=0, usd=None, tokens_without_usd=2, written_ts=1)"
 assert_eq "a valid slot" "1" "$(py "print(g.add_slots(usage_db.open_aggregates('claude'), [$good]))")"
 assert_eq "the same slot again: a no-op" "0" "$(py "print(g.add_slots(usage_db.open_aggregates('claude'), [$good]))")"
+assert_contains "rejected: a slot of another machine (one file per machine)" "$(py "g.add_slots(usage_db.open_aggregates('claude'), [$good | dict(machine='m2')])" 2>&1)" "a slot of 'm2' in the file of 'm1'"
+assert_eq "...while m2's own file takes it" "1" "$(py "print(g.add_slots(usage_db.open_aggregates('claude', machine='m2'), [$good | dict(machine='m2')]))")"
 for bad in "ts=601" "dt='x'" "machine='a b'" "requests=-1" "usd='1'" "five_hour_pct=3"; do
     assert_contains "rejected: $bad" "$(py "g.add_slots(usage_db.open_aggregates('claude'), [$good | dict($bad)])" 2>&1)" "ValueError"
 done
@@ -87,7 +89,7 @@ T0=1791460800   # 2026-10-08T12:00:00Z
 out="$(e2e $((T0 + 900 + 400)))"   # 12:21:40: complete through 12:06:40, so the 12:00 slot is final, 12:05 not yet
 assert_contains "the reader read both requests (req_b started before 12:06:40), the resumed copy skipped" "$out" "requests added 2"
 assert_contains "...but wrote only the final slot, 12:00" "$out" "slots: 1 written"
-ADB_E2E="$E2E/rt/data/claude/aggregates.db"
+ADB_E2E="$E2E/rt/data/claude/aggregates/m1.db"
 assert_eq "12:00: req_a once (resumed copy skipped), its largest output, 5m / 1h split, telemetry's cost" \
     "1791460800	/Users/x/dev/app	cli	claude-opus-5-5	1	2	500	100	10	20	0	0.0123	0" \
     "$(python3 -c 'import sqlite3, sys

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for src/transcript_reader.py: one row per API request from fixture
-# transcripts, into intermediary/ (Claude) - the largest-output line wins, a request is stored only once
+# transcripts, into data/claude/intermediary.db (Claude) - the largest-output line wins, a request is stored only once
 # 15 min old, a resumed copy is not counted twice, and a run with nothing
 # new reads nothing. The clock is faked (NOW); no real transcript is read.
 set -uo pipefail
@@ -10,7 +10,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-transcripts.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 RT="$TMP/rt"
 PROJ="$TMP/projects"
-SDB="$RT/intermediary/claude/requests.db"   # Claude requests: the local working tables (design/TARGET_SPEC.md §5)
+SDB="$RT/data/claude/intermediary.db"   # Claude requests: the local working tables (design/DESIGN.md §5)
 CODEX="$TMP/codex"
 mkdir -p "$PROJ/-Users-x-dev-app" "$PROJ/-Users-x-opt-job" "$CODEX/sessions/2026/10/08" "$CODEX/archived_sessions"
 
@@ -83,9 +83,9 @@ printf '%s' "$(line 2026-10-08T12:31:00.000Z req_e 1)" | head -c 60 >> "$APP"
 read_at $((T0 + 4000)) >/dev/null
 assert_eq "nothing added from a partial line" "4" "$(q "SELECT COUNT(*) FROM requests")"
 
-section "intermediary/ deleted: everything is read again, the same rows"
+section "intermediary.db deleted: everything is read again, the same rows"
 before="$(q "SELECT group_concat(request_id || output_tokens) FROM (SELECT * FROM requests ORDER BY request_id)")"
-rm -rf "$RT/intermediary"
+rm -f "$SDB" "$SDB-wal" "$SDB-shm"
 read_at $((T0 + 5000)) >/dev/null
 assert_eq "rebuilt identical" "$before" "$(q "SELECT group_concat(request_id || output_tokens) FROM (SELECT * FROM requests ORDER BY request_id)")"
 

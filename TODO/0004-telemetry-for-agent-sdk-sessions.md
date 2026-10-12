@@ -39,6 +39,6 @@ auto-apply starts its Agent SDK sessions with `setting_sources=[]`, so the telem
 
 ## Links
 - `FOR_READERS.md`, `src/merge_claude_env.py` (the keys)
-- concern C7 of `design/OPEN_QUESTIONS.md`
+- concern C7 of `git show 1ced0c4:design/OPEN_QUESTIONS.md`
 
 ## Result

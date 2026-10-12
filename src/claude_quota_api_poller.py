@@ -19,14 +19,14 @@ When to poll is decided by its job-runner entrypoint claude-quota.sh
 (deployed to ~/opt/agent-usage-tracker/, run every 60 s by its trigger),
 which passes --if-older-than: this poller skips (exit 10) while the
 account's newest reading, any source, any machine, is younger than that
-(design/TARGET_SPEC.md §3.4). A 429 waits out its Retry-After on this
+(design/DESIGN.md §3.4). A 429 waits out its Retry-After on this
 machine only - 429s are counted per login token, i.e. per machine
 (USAGE_DATA_SOURCES.md §3.5) - (exit 75, "retry-after N" ending the last
 line). One start = at most one attempt.
 
 The MacBook also runs the 2-min sync of the quota readings with the VM
 (--sync-with=H-Frank-1 --sync-every=110; the VM cannot reach the Mac, so the
-Mac does both directions, design/TARGET_SPEC.md §3.3), before deciding: one
+Mac does both directions, design/DESIGN.md §3.3), before deciding: one
 ssh call runs the VM's gate (ingest_account_quota.py --sync-from), which
 stores the Mac's own new readings and answers with its own. Only a
 machine's own readings travel (`machine`); the two watermarks (the last
