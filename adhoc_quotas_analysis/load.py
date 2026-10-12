@@ -29,7 +29,7 @@ def fmt(ts: float | None) -> str:
     return "-" if ts is None else dt.datetime.fromtimestamp(ts, dt.timezone.utc).strftime("%m-%d %H:%M")
 
 
-# The account's plan over time (USAGE_DATA_REFERENCE.md §6). A percent of one plan is not comparable with
+# The account's plan over time (doc/changes.md). A percent of one plan is not comparable with
 # another's: windows, budgets and ratios are always per plan. Add a row when the plan changes.
 #   pro+promo  Claude Pro with Anthropic's +50% weekly promo, which ended 2026-08-31 23:59 PT (the 7-day meter
 #              only; it did not reset the meter, so the 7-day window that week is cut in two)

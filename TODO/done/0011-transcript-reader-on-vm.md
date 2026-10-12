@@ -40,7 +40,7 @@ Only the Mac's `aggregates` job turns transcripts into slots (Category 3). The V
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
-- `design/DESIGN.md` §6, concern C9 of `git show 1ced0c4:design/OPEN_QUESTIONS.md`
+- `doc/design.md` §6, concern C9 of `git show 1ced0c4:design/OPEN_QUESTIONS.md`
 
 ## Result
 

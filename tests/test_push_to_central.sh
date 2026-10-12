@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for src/push_to_central.py and src/receive_from_machine.py (Category
-# 3 sent to the VM, design/DESIGN.md §6.4): the new slots reach
+# 3 sent to the VM, doc/design.md §6.4): the new slots reach
 # data/claude/aggregates/<machine>.db through the gate, a second
 # send sends nothing, a dead link keeps the watermark, a bad chunk is
 # refused whole; and aggregate_slots.py --send-to. A fake ssh runs the

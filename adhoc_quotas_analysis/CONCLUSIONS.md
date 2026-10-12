@@ -1,6 +1,6 @@
 # Conclusions
 
-The answers to the three questions of `README.md`, Claude only. Two kinds, never mixed:
+The answers to the three questions of `README.html` (drawn there), Claude only. Two kinds, never mixed:
 
 | Kind | Where from | Re-run |
 |---|---|---|
@@ -36,7 +36,7 @@ Exceptions, each one a finding:
 
 ## 2. How many $ make 1% of a window? (`budgets.py`)
 
-`B` = the $ that take a window to 100%, fitted per window on its readings (`README.md`). Claude Code reports a $ only since 2026-09-30, and not for every session, so only windows from 10-05 have one: 41 earlier 5-hour windows have none.
+`B` = the $ that take a window to 100%, fitted per window on its readings (`AGENTS.md`, Vocabulary). Claude Code reports a $ only since 2026-09-30, and not for every session, so only windows from 10-05 have one: 41 earlier 5-hour windows have none.
 
 | Plan | 5-hour B: median [p10–p90] | 1% of 5 h | 7-day B | 5-hour windows per week: median (all gains summed) |
 |---|---|---|---|---|

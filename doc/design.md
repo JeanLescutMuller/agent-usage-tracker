@@ -4,8 +4,8 @@ Records Claude Code usage over time - quota percent, tokens, Claude Code's own $
 
 | | |
 |---|---|
-| Status | **built** 2026-10-10 (5 migration phases, each a dated row in `USAGE_DATA_REFERENCE.md` §6); decisions P1–P12 validated by Jean on 2026-10-10 (§11); the page validated by Jean on 2026-10-12 |
-| Two files, one design | `design/DESIGN.md` (this file, for agents) and `README.html` (the same sections, drawn, for Jean; the README since 2026-10-12). **They change together, section by section.** |
+| Status | **built** 2026-10-10 (5 migration phases, each a dated row in `doc/changes.md`); decisions P1–P12 validated by Jean on 2026-10-10 (§11); the page validated by Jean on 2026-10-12 |
+| Two files, one design | `doc/design.md` (this file, for agents) and `README.html` (the same sections, drawn, for Jean; the README since 2026-10-12). **They change together, section by section.** |
 | Words | the `## Vocabulary` table of `AGENTS.md` |
 | History | the migration plan and the record of the open questions: `git show 1ced0c4:design/MIGRATION_PLAN.md`, `git show 1ced0c4:design/OPEN_QUESTIONS.md` |
 | Changed 2026-10-12 | P13 `data/claude/intermediary.db` replaces `intermediary/claude/`; P14 one `aggregates` file per machine in `data/claude/aggregates/`, replacing `central/` (§11); built the same day, 18:45 UTC (`migrate_to_target.py data-layout`) |
@@ -57,17 +57,16 @@ Data only flows 2 → 3 → 4 and 1 → 4. Only Categories 1 and 3 cross machine
 | 2 | same | `telemetry` + view `telemetry_requests` | one telemetry event (the view: one per request) | tokens + Claude Code's $ per request | Claude Code (OTLP) |
 | 2 | `~/.claude/projects/**/*.jsonl` | — | Claude Code's own transcript lines | tokens per request, `cost-state` per session | Claude Code (deletes them after 365 days) |
 | — | `data/claude/intermediary.db` (local, never sent) | `requests`, `scans`, `offsets` | one request counted once; one reader run; one transcript file | tokens; "complete through" time; how far read | Category 2; deletable, rebuilt from it (§5) |
-| 3 | `data/claude/aggregates/<machine>.db`: one file per machine, each machine its own; the VM also keeps the Mac's, as received | `slots` | 5-min slot × machine × folder × entrypoint × model | 6 token columns (input, output, cache read, cache write 5m / 1h / unknown) + Claude Code's $ where telemetry has it + tokens without $ | transcripts + telemetry, through `intermediary/` |
+| 3 | `data/claude/aggregates/<machine>.db`: one file per machine, each machine its own; the VM also keeps the Mac's, as received | `slots` | 5-min slot × machine × folder × entrypoint × model | 6 token columns (input, output, cache read, cache write 5m / 1h / unknown) + Claude Code's $ where telemetry has it + tokens without $ | transcripts + telemetry, through `intermediary.db` |
 | 4 | — | — | a reader builds it from 1 + 3 | — | — |
 
 ```
 ~/dev/agent-usage-tracker/          the repo (development: Mac only)
 ├── README.html                     the same design drawn, for Jean (the only README)
-├── AGENTS.md                       rules for working on it, the vocabulary
+├── AGENTS.md                       rules for working on it, the vocabulary, which file answers what
 ├── FOR_READERS.md                  how other projects read the data
-├── USAGE_DATA_SOURCES.md           what exists upstream
-├── USAGE_DATA_REFERENCE.md         what is captured, where, and its change history (§6)
-├── design/                         DESIGN.md (this file)
+├── doc/                            design.md (this file), tables.md (every table, field by field),
+│                                   upstream.md (what exists upstream), changes.md (what changed, when)
 ├── TODO/                           open work, one file per task; done/ for finished ones
 ├── src/                            gates, collectors, usage_db.py; launchd/, systemd/ trigger templates
 ├── jobs/                           job-runner entrypoints <job>.sh and their dashboard settings <job>.conf
@@ -227,7 +226,7 @@ The only writer of `data/claude/aggregates/<machine>.db`: checks each row (colum
 
 ### 6.4 Sending to the VM (P9, P14)
 
-`push_to_central.py` sends the slots not sent yet (rowid watermark in `state/push/watermarks.json`, chunks of 20,000, ssh; the watermark advances only on success). `receive_from_machine.py` on the VM accepts only `slots` and writes `data/claude/aggregates/chan-lescut-macbook-pro.db` through the gate. The VM sends nothing: its slots are already there.
+`push_to_central.py` sends the slots not sent yet (rowid watermark in `state/push/watermarks.json`, chunks of 20,000, ssh; the watermark advances only on success). `receive_from_machine.py` on the VM accepts only `slots` and writes `data/claude/aggregates/chan-lescut-macbook-pro.db` through the gate; one bad row refuses its whole chunk (the job fails, nothing goes silently missing). A slot reaches the VM within 5 min of being final while the Mac is online; a Mac asleep sends everything on its next run. The VM sends nothing: its slots are already there.
 
 | Full reset (one file at a time, by hand) | Then |
 |---|---|
@@ -289,7 +288,7 @@ aggregates.sh ─▶ 1 transcript_reader.py ─▶ intermediary.db           agg
 |---|---|---|
 | statusline reading + printed line (Mac, VM) | LIVE | about 24 ms per render |
 | Category 1 sync Mac ↔ VM | LIVE | both databases hold the same readings |
-| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (`USAGE_DATA_REFERENCE.md` §5.8, `TODO/0010`) |
+| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, `TODO/0010`) |
 | telemetry receiver `otel` | LIVE | auto-apply's Agent SDK sessions send none: their slots carry tokens without $ (`TODO/0004`) |
 | Category 3 `slots` (Mac, VM) | LIVE | history since 2026-07-30; `usd` since 2026-09-30 |
 | the Mac's slots on the VM | LIVE | `data/claude/aggregates/chan-lescut-macbook-pro.db`, the same rows as the Mac's |
@@ -318,16 +317,17 @@ VM deploy: rsync the repo to `~/dev/agent-usage-tracker` there, run its `install
 
 | File | For |
 |---|---|
-| `USAGE_DATA_SOURCES.md` | what usage data exists upstream, Claude and Codex, unit and granularity |
-| `USAGE_DATA_REFERENCE.md` | what this repo captures, from where, into which table, the traps; §6 the dated change history |
-| `FOR_READERS.md` | how another project reads the data |
-| `adhoc_quotas_analysis/` | what the quota percent means (`CONCLUSIONS.md`; drawn: `CONCLUSIONS.html`) |
+| `FOR_READERS.md` | how another project reads the data: the rules, which table answers which question |
+| `doc/tables.md` | every table, field by field: which collector fills it from which upstream source, the traps in the rows |
+| `doc/upstream.md` | what usage data exists upstream, Claude and Codex, unit and granularity, captured or not |
+| `doc/changes.md` | every change to what is captured, dated |
+| `adhoc_quotas_analysis/` | what the quota percent means (`CONCLUSIONS.md`; drawn: its `README.html`) |
 
 Split out of `agent-statusline` on 2026-09-30: its git history up to `d744951` holds this code from 2026-08-31; older history (the original `agent-quota-tracker`) is below this repo's first commit.
 
 ## 11. Decisions
 
-Proposed by the agent, each validated by Jean: P1–P12 on 2026-10-10, P13–P14 on 2026-10-12; the unnumbered ones decided with Jean along the way.
+Proposed by the agent, each validated by Jean: P1–P12 and P15 on 2026-10-10, P13–P14 on 2026-10-12; the unnumbered ones decided with Jean along the way.
 
 | # | Decision | Why | Rejected |
 |---|---|---|---|
@@ -345,10 +345,10 @@ Proposed by the agent, each validated by Jean: P1–P12 on 2026-10-10, P13–P14
 | P12 | one job `aggregates` | reading, building and sending under one claim: two runs would read the same bytes | the jobs `transcripts` and `push` |
 | P13 | the intermediary tables in one file, `data/claude/intermediary.db`, with the offsets as a table (Jean, 2026-10-12) | everything a machine keeps lives under `data/<agent>/`; one file to delete for a rebuild; the offsets commit with their requests | a folder `intermediary/claude/` with `requests.db` + `offsets.json` |
 | P14 | Category 3 as one file per machine, `data/claude/aggregates/<machine>.db`, on the VM too (Jean, 2026-10-12) | a full reset of one machine's slots is deleting one file; one writer machine per file | the folder `central/<machine>/` (left from the push of whole databases); one shared file with a `machine` column (a reset would need a `DELETE`: insert-only) |
+| P15 | no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; *when* is lost, and readers treat the stretch as unknown | any message opens a 5-hour window at an arbitrary time (`doc/upstream.md` §5.2) | a keepalive message every few hours; not tried yet: a command that sends no message (`TODO/0010`) |
 | — | `slots` is one table, no `session_id` | sessions are a Category 2 detail; readers need slots | a `session_totals` table |
 | — | Category 4 belongs to a reader | each reader asks its own question | Category 4 built here every 5 min |
 | — | no $ computed for Claude | Claude Code states its own $ | tokens × list price |
-| — | the token-expiry gap is accepted (`USAGE_DATA_REFERENCE.md` §5.8) | any message opens a 5-hour window at an arbitrary time | a keepalive message every few hours |
 | — | Codex out of this design (§13) | Claude first; Codex's sources differ | — |
 
 ## 12. Facts measured for this design (2026-10-10)
@@ -381,16 +381,16 @@ job aggregates (Codex part)  5 min  ─▶ transcript_reader.py ◀─ ~/.codex/
 |---|---|
 | `codex-quota` | skips while a Codex session file is fresher than 5 min (the session itself writes the quota); exit 10 = skip |
 | `codex-plan-history` | once per 24 h after a success, 1 h after a failure; skips without `~/.codex/auth.json` |
-| Codex turns | entrypoint = `session_meta.source` or `subagent`; match ccusage's monthly totals (`USAGE_DATA_SOURCES.md` §4.1) |
+| Codex turns | entrypoint = `session_meta.source` or `subagent`; match ccusage's monthly totals (`doc/upstream.md` §4.1) |
 | `requests.usd` for Codex | from `usage_db.PRICES` (ccusage's $4 / $20 / cached 0.1× for `gpt-5.6-sol`), NULL for other models: not a number OpenAI states |
 
 What this design changed for Codex: its rows no longer reach the VM (the push of raw rows is gone), and `codex/account_quotas.db` stays on the Mac.
 
 | Category | Codex, sketch |
 |---|---|
-| 1 · Quotas | `codex/account_quotas.db` in the same sync. Codex reset times move and it reports a fake idle countdown (`USAGE_DATA_SOURCES.md` §5.1, §5.3): the reset rule needs care |
+| 1 · Quotas | `codex/account_quotas.db` in the same sync. Codex reset times move and it reports a fake idle countdown (`doc/upstream.md` §5.1, §5.3): the reset rule needs care |
 | 2 · Machine raw | the session files only: no statusline payload captured, no telemetry |
 | 3 · Aggregates | the same `slots` shape, tokens only (OpenAI states no $); then drop `requests.usd` |
 | 4 · Meta-analysis | a reader's, with Codex rows |
 
-Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (`USAGE_DATA_SOURCES.md` §4.3, §4.4); `codex-auto-review` turns (ccusage calls them `gpt-5.6-luna`: keep Codex's own name); Codex on the VM or Mac-only.
+Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (`doc/upstream.md` §4.3, §4.4); `codex-auto-review` turns (ccusage calls them `gpt-5.6-luna`: keep Codex's own name); Codex on the VM or Mac-only.

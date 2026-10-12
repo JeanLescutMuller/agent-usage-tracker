@@ -11,7 +11,7 @@ Three kinds of rows, from three collectors:
     transcript, keyed by request_id.
 Every row is insert-only and deduplicated (`row_hash` or `request_id`
 UNIQUE). Nothing here may carry a quota percent, under any name (scope rule,
-USAGE_DATA_REFERENCE.md §1): such a row is rejected with ValueError.
+doc/tables.md §1): such a row is rejected with ValueError.
 
 Command line (migration, and later the VM push): one JSONL row per stdin
 line, in the old session-file shape, inserted with the line itself as `raw`:

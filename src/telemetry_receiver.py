@@ -7,10 +7,10 @@ process - interactive or `claude -p` - POSTs batches of OTLP log records as
 JSON to http://127.0.0.1:4318/v1/logs every few seconds. This collector
 accepts those batches and hands one row per usage event to
 ingest_session_usage.py, which stores it in data/claude/sessions_usages.db's
-telemetry table (session scope, USAGE_DATA_REFERENCE.md §1) - tagged
+telemetry table (session scope, doc/tables.md §1) - tagged
 `source: "claude_otel"`, with `observed_at` (epoch seconds of the event).
 Events without a usable session id are kept with session_id NULL. See
-USAGE_DATA_SOURCES.md §3.7 for
+doc/upstream.md §3.7 for
 what the events carry and why: they are the only per-request record that
 includes the requests Claude Code never writes to its transcripts. They
 carry no quota percent, so they belong in session scope.

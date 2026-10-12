@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Sends this machine's new Category 3 rows - the `slots` of
 data/claude/aggregates/<machine>.db - to the VM (H-Frank-1), into the file
-of the same name there (design/DESIGN.md §6.4):
+of the same name there (doc/design.md §6.4):
     ~/opt/agent-usage-tracker/data/claude/aggregates/<machine>.db
 Run by the Mac's `aggregates` job right after it writes the slots
 (aggregate_slots.py --send-to); the VM sends nothing (its slots are already

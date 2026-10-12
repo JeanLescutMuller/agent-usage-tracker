@@ -10,7 +10,7 @@ TMP="$(mktemp -d "${TMPDIR:-/tmp}/agent-usage-tracker-transcripts.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 RT="$TMP/rt"
 PROJ="$TMP/projects"
-SDB="$RT/data/claude/intermediary.db"   # Claude requests: the local working tables (design/DESIGN.md §5)
+SDB="$RT/data/claude/intermediary.db"   # Claude requests: the local working tables (doc/design.md §5)
 CODEX="$TMP/codex"
 mkdir -p "$PROJ/-Users-x-dev-app" "$PROJ/-Users-x-opt-job" "$CODEX/sessions/2026/10/08" "$CODEX/archived_sessions"
 

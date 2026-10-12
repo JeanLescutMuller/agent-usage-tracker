@@ -2,7 +2,7 @@
 # Repo-wide checks that don't belong to any one file: every script parses,
 # shellcheck passes where available, only the two gates write to a database,
 # and the boundary with agent-statusline
-# documented in design/DESIGN.md §7.1 holds - this
+# documented in doc/design.md §7.1 holds - this
 # repo never sources or runs anything from it, and reads exactly one thing
 # from its runtime tree: the heartbeat files.
 set -uo pipefail
@@ -47,7 +47,7 @@ section "only the gates write to a database"
 # SQL that changes data or schema lives in usage_db.py (the schema) and the
 # three ingest_*.py gates, nowhere else under src/ or bin/ - except
 # transcript_reader.py's writes to intermediary.db (local working tables, not
-# data: design/DESIGN.md §5).
+# data: doc/design.md §5).
 writes="$(grep -nE '"(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER) ' "$REPO_ROOT"/src/*.py "$REPO_ROOT"/bin/* 2>/dev/null \
     | grep -v -e '/src/usage_db.py:' -e '/src/ingest_account_quota.py:' -e '/src/ingest_session_usage.py:' -e '/src/ingest_aggregates.py:' \
     -e '/src/transcript_reader.py:.*INTO requests ' -e '/src/transcript_reader.py:.*INTO scans ' -e '/src/transcript_reader.py:.* offsets' || true)"

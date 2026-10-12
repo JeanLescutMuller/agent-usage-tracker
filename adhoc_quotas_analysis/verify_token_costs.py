@@ -7,7 +7,7 @@ Three independent checks, all read-only, no network:
   3. Codex session files, summed per month x model, vs the same ccusage report (tokens only).
 
 Run by hand: `python3 adhoc_quotas_analysis/verify_token_costs.py`. Months still running when the reference was
-taken (2026-10) keep growing, so a difference there is expected. Results are recorded in USAGE_DATA_SOURCES.md §3.4.
+taken (2026-10) keep growing, so a difference there is expected. Results are recorded in doc/upstream.md §3.4.
 """
 import collections, glob, json, os, sqlite3, statistics
 

@@ -27,7 +27,7 @@ created_by: chan-lescut-macbook-pro, claude, 18992588-d956-40f0-84e4-45868a226a5
 ---
 ## Context
 
-Parked by Jean on 2026-10-10: the first target design was Claude only. Codex keeps running as before (jobs `codex-quota`, `codex-plan-history`, the Codex part of `transcript_reader.py`); its rows no longer reach the VM since the `push` job went (phase 3). What exists, and a sketch of Codex in each category: `design/DESIGN.md` §13.
+Parked by Jean on 2026-10-10: the first target design was Claude only. Codex keeps running as before (jobs `codex-quota`, `codex-plan-history`, the Codex part of `transcript_reader.py`); its rows no longer reach the VM since the `push` job went (phase 3). What exists, and a sketch of Codex in each category: `doc/design.md` §13.
 
 ## Done when
 
@@ -37,6 +37,6 @@ Parked by Jean on 2026-10-10: the first target design was Claude only. Codex kee
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
-- `design/DESIGN.md` §13
+- `doc/design.md` §13
 
 ## Result

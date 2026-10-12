@@ -27,7 +27,7 @@ created_by: chan-lescut-macbook-pro, claude, 18992588-d956-40f0-84e4-45868a226a5
 ---
 ## Context
 
-Accepted on 2026-10-10 (`USAGE_DATA_REFERENCE.md` §5.8): no Claude reading is stored while Claude Code runs on neither machine for more than 8 h. A keepalive message was rejected: any message opens a 5-hour window. Not tried: whether `claude auth status` or `claude doctor`, which send no message, renew the access token. If one does, a job running it every 6 h on the VM keeps its poller alive without opening a window. Related: #1 (the refresh token's fixed expiry).
+Accepted on 2026-10-10 (`doc/design.md` P15): no Claude reading is stored while Claude Code runs on neither machine for more than 8 h. A keepalive message was rejected: any message opens a 5-hour window. Not tried: whether `claude auth status` or `claude doctor`, which send no message, renew the access token. If one does, a job running it every 6 h on the VM keeps its poller alive without opening a window. Related: #1 (the refresh token's fixed expiry).
 
 ## Done when
 
@@ -37,6 +37,6 @@ Accepted on 2026-10-10 (`USAGE_DATA_REFERENCE.md` §5.8): no Claude reading is s
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
-- `USAGE_DATA_REFERENCE.md` §5.8, `USAGE_DATA_SOURCES.md` §3.5
+- `doc/design.md` P15, `doc/upstream.md` §3.5
 
 ## Result

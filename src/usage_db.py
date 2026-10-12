@@ -7,7 +7,7 @@ Two SQLite databases per agent, under the runtime's data/<agent>/:
                       attempts. Never a per-session cost or token count.
   sessions_usages.db  per-session and per-request tokens and USD. Never a
                       quota percent.
-That split is the scope rule of USAGE_DATA_REFERENCE.md §1.
+That split is the scope rule of doc/tables.md §1.
 
 Only the gates write. Every row is insert-only and carries `row_hash`
 (UNIQUE), so re-inserting the same row - a re-run migration, a re-sent push -
@@ -70,7 +70,7 @@ CREATE TABLE poll_errors (
 );
 CREATE INDEX poll_errors_source_ts ON poll_errors(source, ts);
 -- The freshest reading of the account, whatever wrote it, on any machine,
--- with the reset rule (design/DESIGN.md §3.2): a window whose reset
+-- with the reset rule (doc/design.md §3.2): a window whose reset
 -- time has passed is at 0% and its reset unknown (NULL), until a newer
 -- reading - readings stop while nobody uses Claude Code.
 CREATE VIEW latest AS
@@ -127,7 +127,7 @@ CREATE VIEW telemetry_requests AS
                     WHERE event = 'api_request' AND request_id IS NOT NULL GROUP BY request_id);
 """
 
-# Codex only (out of the first target, design/DESIGN.md §13): its turns stay in
+# Codex only (out of the first target, doc/design.md §13): its turns stay in
 # data/codex/sessions_usages.db, with the price-table USD. Claude's requests moved to
 # intermediary.db and its 5-min totals to aggregates/ (migration phases 2 and 5, 2026-10-10).
 CODEX_REQUESTS_SCHEMA = """
@@ -198,7 +198,7 @@ CREATE VIEW usage_5m AS
     GROUP BY slot_ts, folder, interactive;
 """
 
-# Category 3 (design/DESIGN.md §6): data/<agent>/aggregates/<machine>.db,
+# Category 3 (doc/design.md §6): data/<agent>/aggregates/<machine>.db,
 # one file per machine (P14), one table. A slot row is written once, when
 # final, and never changes; the Mac's file is sent to the VM, into the file
 # of the same name there. Written only by ingest_aggregates.py.
@@ -225,7 +225,7 @@ CREATE TABLE slots (                 -- one row per 5-min slot × machine × fol
 CREATE INDEX slots_machine_ts ON slots(machine, ts);
 """
 
-# data/<agent>/intermediary.db (design/DESIGN.md §5, P13): the working
+# data/<agent>/intermediary.db (doc/design.md §5, P13): the working
 # tables between Category 2 and Category 3. Local, never sent; deleting
 # the file is always safe (the next run re-reads every transcript).
 # Written only by transcript_reader.py.
@@ -272,7 +272,7 @@ PRICES = {
 }
 
 # Key names that mean "a quota percent": never allowed in sessions_usages.db
-# (the check USAGE_DATA_REFERENCE.md §8 runs on the data).
+# (the check doc/tables.md §9 runs on the data).
 PERCENT_KEY_RE = re.compile(r"pct|percent|utiliz|basis_points", re.IGNORECASE)
 
 

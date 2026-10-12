@@ -1,6 +1,6 @@
-# Usage data sources — what exists upstream, before we capture anything
+# Upstream: the usage data Claude Code and Codex expose, before we capture anything
 
-**Canonical inventory of every place Claude Code and Codex expose usage data, independent of what this repository does with it.** It answers "what *could* be captured, where, in which unit, at which granularity". What `agent-usage-tracker` actually captures, how, and where it lands is the companion file `USAGE_DATA_REFERENCE.md`. Other projects link to these two files rather than restating them.
+**Canonical inventory of every place Claude Code and Codex expose usage data, independent of what this repository does with it.** It answers "what *could* be captured, where, in which unit, at which granularity". What `agent-usage-tracker` actually captures, and into which table: `doc/tables.md`, which cites this file as "Upstream §n".
 
 It does **not** cover how percentages convert into dollars beyond the constants in §1 — that analysis, with its error bars, is `adhoc_quotas_analysis/CONCLUSIONS.md`.
 

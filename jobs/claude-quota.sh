@@ -1,6 +1,6 @@
 #!/bin/bash
 # ~/opt/agent-usage-tracker/claude-quota.sh: job agent-usage-tracker.claude-quota.
-# Requirements (design/DESIGN.md §3.3, §3.4):
+# Requirements (doc/design.md §3.3, §3.4):
 #   - one reading of the Claude account's quota (GET /api/oauth/usage) when the account's newest reading, any
 #     source, any machine, is too old; Mac and VM, the same file, tick every 60 s
 #   - the Mac syncs the readings with the VM every 2 min, both ways, before deciding (the VM cannot reach the Mac)
@@ -9,7 +9,7 @@
 #   - VM unreachable: the Mac goes on alone; a sync failing for 30 min is a failure
 #   - 429: wait its Retry-After, on this machine only (WAIT, not WAIT … all): the endpoint counts per login token,
 #     one per machine - on 2026-10-10 the Mac polled fine 27 times during a VM Retry-After of 3600 s
-#     (USAGE_DATA_SOURCES.md §3.5)
+#     (doc/upstream.md §3.5)
 #   - 401 or another error: a failure
 #   - timeout 1 min; two readings at once are harmless: no claim
 #   - summary: the poller's last line ("5h …% · 7d …% · sync ↑2 ↓0")

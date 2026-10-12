@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- agent-usage-tracker's README, its only one (no README.md): the design, drawn - the same 13 sections as design/DESIGN.md, which changes with it. One self-contained file; opens with a double-click (open README.html). -->
+<!-- agent-usage-tracker's README, its only one (no README.md): the design, drawn - the same 13 sections as doc/design.md, which changes with it. One self-contained file; opens with a double-click (open README.html). -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -126,12 +126,12 @@
   <p class="lead">Records Claude Code usage over time - quota percent, tokens, Claude Code's own $ - on the MacBook and the VM <code>H-Frank-1</code>, in four categories of data. Claude only; Codex keeps its own jobs (section 13).</p>
   <div class="card" style="margin-top: 14px">
     <table class="tl">
-      <tr><td>Status</td><td><b>built</b> 2026-10-10 (5 migration phases, each a dated row in <code>USAGE_DATA_REFERENCE.md</code> §6); decisions P1–P12 validated by Jean on 2026-10-10 (section 11); this page validated by Jean on 2026-10-12</td></tr>
+      <tr><td>Status</td><td><b>built</b> 2026-10-10 (5 migration phases, each a dated row in <code>doc/changes.md</code>); decisions P1–P12 validated by Jean on 2026-10-10 (section 11); this page validated by Jean on 2026-10-12</td></tr>
       <tr><td>Changed 2026-10-12</td><td>P13 <code>data/claude/intermediary.db</code> replaces <code>intermediary/claude/</code>; P14 one aggregates file per machine in <code>data/claude/aggregates/</code>, replacing <code>central/</code> (section 11); built the same day, 18:45 UTC (<code>migrate_to_target.py data-layout</code>)</td></tr>
-      <tr><td>Two files, one design</td><td><code>README.html</code> (this page, for Jean; the README since 2026-10-12) and <code>design/DESIGN.md</code> (the same sections, for agents). <b>They change together, section by section.</b></td></tr>
+      <tr><td>Two files, one design</td><td><code>README.html</code> (this page, for Jean; the README since 2026-10-12) and <code>doc/design.md</code> (the same sections, for agents). <b>They change together, section by section.</b></td></tr>
       <tr><td>Words</td><td>the <code>## Vocabulary</code> table of <code>AGENTS.md</code></td></tr>
       <tr><td>History</td><td>the migration plan and the record of the open questions: <code>git show 1ced0c4:design/MIGRATION_PLAN.md</code>, <code>git show 1ced0c4:design/OPEN_QUESTIONS.md</code></td></tr>
-      <tr><td>Start here</td><td>rules for agents: <code>AGENTS.md</code> · how other projects read the data: <code>FOR_READERS.md</code> · what usage data exists upstream: <code>USAGE_DATA_SOURCES.md</code> · what is captured, where: <code>USAGE_DATA_REFERENCE.md</code></td></tr>
+      <tr><td>Start here</td><td>rules for agents: <code>AGENTS.md</code> · how other projects read the data: <code>FOR_READERS.md</code> · every table, field by field: <code>doc/tables.md</code> · what usage data exists upstream: <code>doc/upstream.md</code> · what changed, when: <code>doc/changes.md</code></td></tr>
       <tr><td>Open work</td><td><code>TODO/</code>, one file per task</td></tr>
     </table>
   </div>
@@ -304,11 +304,12 @@
   <div class="card">
 <pre>~/dev/agent-usage-tracker/          the repo (development: Mac only)
 ├── README.html                     this page, the only README
-├── AGENTS.md                       rules for working on it, the vocabulary
+├── AGENTS.md                       rules, the vocabulary, which file answers what
 ├── FOR_READERS.md                  how other projects read the data
-├── USAGE_DATA_SOURCES.md           what exists upstream
-├── USAGE_DATA_REFERENCE.md         what is captured, where; §6 change history
-├── design/                         DESIGN.md (this page's sections, for agents)
+├── doc/                            design.md (this page's sections, for agents)
+│                                   tables.md (every table, field by field)
+│                                   upstream.md (what exists upstream)
+│                                   changes.md (what changed, when)
 ├── TODO/                           open work, one file per task; done/
 ├── src/                            gates, collectors, usage_db.py;
 │                                   launchd/, systemd/ trigger templates
@@ -485,7 +486,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
   </div>
   <h3 id="send">6.4 · Sending to the VM <span class="badge b-planned">P9</span> <span class="badge b-planned">P14</span></h3>
   <div class="card">
-    <p style="margin: 0"><code>push_to_central.py</code> sends the slots not sent yet (rowid watermark in <code>state/push/watermarks.json</code>, chunks of 20,000, ssh; the watermark advances only on success). <code>receive_from_machine.py</code> on the VM accepts only <code>slots</code> and writes <code>data/claude/aggregates/chan-lescut-macbook-pro.db</code> through the gate. The VM sends nothing: its slots are already there. The copies of the old push (raw rows, until 2026-10-10) are in <code>data/_archive/</code>, untouched.</p>
+    <p style="margin: 0"><code>push_to_central.py</code> sends the slots not sent yet (rowid watermark in <code>state/push/watermarks.json</code>, chunks of 20,000, ssh; the watermark advances only on success). <code>receive_from_machine.py</code> on the VM accepts only <code>slots</code> and writes <code>data/claude/aggregates/chan-lescut-macbook-pro.db</code> through the gate; one bad row refuses its whole chunk (the job fails, nothing goes silently missing). A slot reaches the VM within 5 min of being final while the Mac is online; a Mac asleep sends everything on its next run. The VM sends nothing: its slots are already there. The copies of the old push (raw rows, until 2026-10-10) are in <code>data/_archive/</code>, untouched.</p>
     <table style="margin-top: 10px">
       <tr><th>Full reset (one file at a time, by hand)</th><th>Then</th></tr>
       <tr><td>a machine's own <code>aggregates/&lt;machine&gt;.db</code> deleted</td><td>its next <code>aggregates</code> run rebuilds every slot from <code>intermediary.db</code> (and that from the transcripts, if it was deleted too)</td></tr>
@@ -608,7 +609,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <tr><th>Component</th><th>Status</th><th>Note</th></tr>
       <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
       <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
-      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (<code>USAGE_DATA_REFERENCE.md</code> §5.8, <code>TODO/0010</code>)</td></tr>
+      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, <code>TODO/0010</code>)</td></tr>
       <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO/0004</code>)</td></tr>
       <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
       <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>data/claude/aggregates/chan-lescut-macbook-pro.db</code>, the same rows as the Mac's</td></tr>
@@ -635,17 +636,18 @@ bash tests/run.sh    # hermetic</pre>
     </table>
     <table style="margin-top: 12px">
       <tr><th>File</th><th>For</th></tr>
-      <tr><td><code>USAGE_DATA_SOURCES.md</code></td><td>what usage data exists upstream, for Claude and Codex, in which unit and granularity</td></tr>
-      <tr><td><code>USAGE_DATA_REFERENCE.md</code></td><td>what this repo captures, from where, into which table, and the traps; its §6 is the dated change history</td></tr>
-      <tr><td><code>FOR_READERS.md</code></td><td>how another project reads the data</td></tr>
-      <tr><td><code>adhoc_quotas_analysis/</code></td><td>the research into what the quota percent means (<code>CONCLUSIONS.md</code>; drawn: <code>CONCLUSIONS.html</code>)</td></tr>
+      <tr><td><code>FOR_READERS.md</code></td><td>how another project reads the data: the rules, which table answers which question</td></tr>
+      <tr><td><code>doc/tables.md</code></td><td>every table, field by field: which collector fills it from which upstream source, the traps in the rows</td></tr>
+      <tr><td><code>doc/upstream.md</code></td><td>what usage data exists upstream, for Claude and Codex, in which unit and granularity, captured or not</td></tr>
+      <tr><td><code>doc/changes.md</code></td><td>every change to what is captured, dated</td></tr>
+      <tr><td><code>adhoc_quotas_analysis/</code></td><td>the research into what the quota percent means (<code>CONCLUSIONS.md</code>; drawn: its <code>README.html</code>)</td></tr>
     </table>
     <p class="note">Split out of <code>agent-statusline</code> on 2026-09-30: its git history up to <code>d744951</code> holds this code from 2026-08-31; older history (the original <code>agent-quota-tracker</code>) is below this repo's first commit.</p>
   </div>
 
   <h2 id="decisions">11 · Decisions</h2>
   <div class="card">
-    <p class="note">Proposed by the agent, each validated by Jean: P1–P12 on 2026-10-10, P13–P14 on 2026-10-12; the unnumbered ones decided with Jean along the way. The P-badges above point here.</p>
+    <p class="note">Proposed by the agent, each validated by Jean: P1–P12 and P15 on 2026-10-10, P13–P14 on 2026-10-12; the unnumbered ones decided with Jean along the way. The P-badges above point here.</p>
     <table>
       <tr><th>#</th><th>Decision</th><th>Why</th><th>Rejected</th></tr>
       <tr><td>P1</td><td>a reading carries <code>machine</code>, in its raw JSON (so in <code>row_hash</code>) and a column</td><td>the same reading taken on two machines never collides; a synced row keeps its origin</td><td>labelling old rows by the database holding them: wrong for the 72 <code>--peer</code> copies (NULL instead)</td></tr>
@@ -662,10 +664,10 @@ bash tests/run.sh    # hermetic</pre>
       <tr><td>P12</td><td>one job <code>aggregates</code></td><td>reading, building and sending under one claim: two runs would read the same bytes</td><td>the jobs <code>transcripts</code> and <code>push</code></td></tr>
       <tr><td>P13</td><td>the intermediary tables in one file, <code>data/claude/intermediary.db</code>, with the offsets as a table (Jean, 2026-10-12)</td><td>everything a machine keeps lives under <code>data/&lt;agent&gt;/</code>; one file to delete for a rebuild; the offsets commit with their requests</td><td>a folder <code>intermediary/claude/</code> with <code>requests.db</code> + <code>offsets.json</code></td></tr>
       <tr><td>P14</td><td>Category 3 as one file per machine, <code>data/claude/aggregates/&lt;machine&gt;.db</code>, on the VM too (Jean, 2026-10-12)</td><td>a full reset of one machine's slots is deleting one file; one writer machine per file</td><td>the folder <code>central/&lt;machine&gt;/</code> (left from the push of whole databases); one shared file with a <code>machine</code> column (a reset would need a <code>DELETE</code>: insert-only)</td></tr>
+      <tr><td>P15</td><td>no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; <i>when</i> is lost, and readers treat the stretch as unknown</td><td>any message opens a 5-hour window at an arbitrary time (<code>doc/upstream.md</code> §5.2)</td><td>a keepalive message every few hours; not tried yet: a command that sends no message (<code>TODO/0010</code>)</td></tr>
       <tr><td>—</td><td><code>slots</code> is one table, no <code>session_id</code></td><td>sessions are a Category 2 detail; readers need slots</td><td>a <code>session_totals</code> table</td></tr>
       <tr><td>—</td><td>Category 4 belongs to a reader</td><td>each reader asks its own question</td><td>Category 4 built here every 5 min</td></tr>
       <tr><td>—</td><td>no $ computed for Claude</td><td>Claude Code states its own $</td><td>tokens × list price</td></tr>
-      <tr><td>—</td><td>the token-expiry gap is accepted (<code>USAGE_DATA_REFERENCE.md</code> §5.8)</td><td>any message opens a 5-hour window at an arbitrary time</td><td>a keepalive message every few hours</td></tr>
       <tr><td>—</td><td>Codex out of this design (section 13)</td><td>Claude first; Codex's sources differ</td><td>—</td></tr>
     </table>
   </div>
@@ -698,21 +700,21 @@ job aggregates (Codex part)  5 min  ─▶ transcript_reader.py ◀─ ~/.codex/
       <tr><th>Piece</th><th>Notes</th></tr>
       <tr><td><code>codex-quota</code></td><td>skips while a Codex session file is fresher than 5 min (the session itself writes the quota); exit 10 = skip</td></tr>
       <tr><td><code>codex-plan-history</code></td><td>once per 24 h after a success, 1 h after a failure; skips without <code>~/.codex/auth.json</code></td></tr>
-      <tr><td>Codex turns</td><td>entrypoint = <code>session_meta.source</code> or <code>subagent</code>; match ccusage's monthly totals (<code>USAGE_DATA_SOURCES.md</code> §4.1)</td></tr>
+      <tr><td>Codex turns</td><td>entrypoint = <code>session_meta.source</code> or <code>subagent</code>; match ccusage's monthly totals (<code>doc/upstream.md</code> §4.1)</td></tr>
       <tr><td><code>requests.usd</code> for Codex</td><td>from <code>usage_db.PRICES</code> (ccusage's $4 / $20 / cached 0.1× for <code>gpt-5.6-sol</code>), NULL for other models: not a number OpenAI states</td></tr>
     </table>
     <p class="note">What this design changed for Codex: its rows no longer reach the VM (the push of raw rows is gone), and <code>codex/account_quotas.db</code> stays on the Mac.</p>
     <table>
       <tr><th>Category</th><th>Codex, sketch</th></tr>
-      <tr><td><span class="cat c1">1 · Quotas</span></td><td><code>codex/account_quotas.db</code> in the same sync. Codex reset times move and it reports a fake idle countdown (<code>USAGE_DATA_SOURCES.md</code> §5.1, §5.3): the reset rule needs care</td></tr>
+      <tr><td><span class="cat c1">1 · Quotas</span></td><td><code>codex/account_quotas.db</code> in the same sync. Codex reset times move and it reports a fake idle countdown (<code>doc/upstream.md</code> §5.1, §5.3): the reset rule needs care</td></tr>
       <tr><td><span class="cat c2">2 · Machine raw</span></td><td>the session files only: no statusline payload captured, no telemetry</td></tr>
       <tr><td><span class="cat c3">3 · Aggregates</span></td><td>the same <code>slots</code> shape, tokens only (OpenAI states no $); then drop <code>requests.usd</code></td></tr>
       <tr><td><span class="cat c4">4 · Meta-analysis</span></td><td>a reader's, with Codex rows</td></tr>
     </table>
-    <p class="note">Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (<code>USAGE_DATA_SOURCES.md</code> §4.3, §4.4); <code>codex-auto-review</code> turns (ccusage calls them <code>gpt-5.6-luna</code>: keep Codex's own name); Codex on the VM or Mac-only.</p>
+    <p class="note">Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (<code>doc/upstream.md</code> §4.3, §4.4); <code>codex-auto-review</code> turns (ccusage calls them <code>gpt-5.6-luna</code>: keep Codex's own name); Codex on the VM or Mac-only.</p>
   </div>
 
-  <footer>Rules: <code>AGENTS.md</code> · open work: <code>TODO/</code> · readers: <code>FOR_READERS.md</code> · the same design for agents: <code>design/DESIGN.md</code>.</footer>
+  <footer>Rules: <code>AGENTS.md</code> · open work: <code>TODO/</code> · readers: <code>FOR_READERS.md</code> · the same design for agents: <code>doc/design.md</code>.</footer>
 </main>
 </body>
 </html>

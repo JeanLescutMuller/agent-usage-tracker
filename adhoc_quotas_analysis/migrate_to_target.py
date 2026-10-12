@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-time, idempotent, hand-run migration (2026-10): from the design of
-2026-10-10 to design/DESIGN.md, in the phases of design/MIGRATION_PLAN.md (git 1ced0c4).
+2026-10-10 to doc/design.md, in the phases of design/MIGRATION_PLAN.md (git 1ced0c4).
 One subcommand per step of that plan; each is safe to re-run, archives what
 it changes first, and prints counts. Every run is also appended to
 <runtime>/data/_archive/migrate_to_target.log (data/_archive survives
@@ -84,7 +84,7 @@ Subcommands (more are added as the phases are built):
            offsets) removed. Codex's sessions database is untouched.
            Idempotent.
   data-layout
-           (2026-10-12, P13 + P14 of design/DESIGN.md §11; every machine,
+           (2026-10-12, P13 + P14 of doc/design.md §11; every machine,
            with its `aggregates` job paused - and on the VM, the Mac's too,
            which sends to it - then install.sh) everything under data/:
            - intermediary/claude/requests.db + offsets.json copied into

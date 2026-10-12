@@ -1,6 +1,6 @@
 #!/bin/bash
 # ~/opt/agent-usage-tracker/aggregates.sh: job agent-usage-tracker.aggregates.
-# Requirements (design/DESIGN.md §6, §8):
+# Requirements (doc/design.md §6, §8):
 #   - Claude transcripts -> data/claude/intermediary.db (each request once) -> the final 5-min slots ->
 #     data/claude/aggregates/<machine>.db;
 #     Codex session files -> data/codex/sessions_usages.db as before; Mac and VM, each for itself

@@ -4,7 +4,7 @@ included) and Codex's session files (~/.codex/sessions and
 archived_sessions): one row per API request (Claude) or per turn (Codex):
 when it happened, its session, execution folder (cwd), entrypoint (cli =
 interactive), model and token counts.
-  - Claude (since 2026-10, design/DESIGN.md §5): into
+  - Claude (since 2026-10, doc/design.md §5): into
     data/claude/intermediary.db (tables `requests`, `scans`, `offsets`), the
     local working tables aggregate_slots.py turns into 5-min slots. Written
     here directly, not through a gate: it is not data, never sent, and
@@ -45,7 +45,7 @@ read again without adding anything. Input is stored without the cached part
 `turn_context` before the event; the entrypoint is session_meta's `source`
 (cli, vscode, exec; a subagent's dict -> "subagent"). A turn is complete when
 its event is written, so there is no 15-min wait. Totals per month and model
-match ccusage exactly (USAGE_DATA_SOURCES.md §4.1).
+match ccusage exactly (doc/upstream.md §4.1).
 
 Usage: python3 transcript_reader.py
 """

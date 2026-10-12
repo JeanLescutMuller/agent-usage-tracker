@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- adhoc_quotas_analysis/CONCLUSIONS.md, drawn for Jean: the same sections and numbers, changed together. One self-contained file. -->
+<!-- adhoc_quotas_analysis's README, its only one: CONCLUSIONS.md drawn for Jean (the same sections and numbers, changed together), then the folder's scripts. One self-contained file. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -300,7 +300,38 @@ footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
     <tr><td>A $ for Agent SDK and test runs (telemetry)</td><td>needs Jean's OK</td><td><code>TODO/0004</code></td></tr>
   </table></div>
 
-  <footer>Source: <code>adhoc_quotas_analysis/CONCLUSIONS.md</code> (the same sections and numbers; they change together) · scripts: <code>windows.py</code>, <code>budgets.py</code>, <code>usage_split.py</code> · the project: <code>README.html</code>.</footer>
+  <h2 id="folder">This folder</h2>
+  <div class="card"><pre style="margin: 0; font: 12.5px ui-monospace, Menlo, monospace; line-height: 1.45">
+ data/claude/account_quotas.db  (Category 1) ─┐
+                                              ├─► load.py ─┬─► windows.py      Q1  when does a window start and end?
+ data/claude/aggregates/*.db    (Category 3) ─┘            ├─► budgets.py      Q2  how many $ make 1% of a window?
+ (one per machine; the VM: both)                          └─► usage_split.py  Q3  where do the $ of a window go?
+                                                                     │
+                                                                     ▼
+                                                     CONCLUSIONS.md (for agents) = this page (drawn)
+
+ transcripts + telemetry + ccusage ─► verify_token_costs.py   are the local tokens and $ exact?
+ the runtime's databases ───────────► migrate_to_target.py    the hand-run migration steps of 2026-10, all done
+</pre></div>
+  <div class="card"><table>
+    <tr><th>File</th><th>What it is</th></tr>
+    <tr><td><code>load.py</code></td><td>the one place that opens the databases: <code>readings()</code>, <code>windows()</code>, <code>slots()</code>, <code>project()</code>, <code>kind()</code>, the plans</td></tr>
+    <tr><td><code>windows.py</code></td><td>Q1: 5-hour gaps, the 7-day Monday time, a 7-day reset across a running 5-hour window</td></tr>
+    <tr><td><code>budgets.py</code></td><td>Q2: B per window, 5-hour windows per week, per plan</td></tr>
+    <tr><td><code>usage_split.py</code></td><td>Q3: per 7-day window, 5-hour window or day, the $ and tokens by project, kind, machine or model</td></tr>
+    <tr><td><code>verify_token_costs.py</code></td><td>a check of the data sources: transcripts against telemetry and ccusage (<code>doc/upstream.md</code> §3.4)</td></tr>
+    <tr><td><code>migrate_to_target.py</code></td><td>the migration steps to <code>doc/design.md</code>, all done; <code>check-intermediary</code> still checks the slots against their requests</td></tr>
+    <tr><td><code>CONCLUSIONS.md</code></td><td>the answers, for agents: re-measured, and frozen (Pro and Codex, 2026-08/09)</td></tr>
+    <tr><td><code>AGENTS.md</code></td><td>the rules for working here, and the words (B, plan, project, kind)</td></tr>
+  </table></div>
+  <div class="card"><b>Run</b> (each under a second, reads <code>~/opt/agent-usage-tracker</code> or <code>$AGENT_USAGE_TRACKER_RUNTIME</code>, standard library only):
+<pre style="margin: 8px 0 0; font: 12.5px ui-monospace, Menlo, monospace">python3 adhoc_quotas_analysis/windows.py
+python3 adhoc_quotas_analysis/budgets.py
+python3 adhoc_quotas_analysis/usage_split.py --span 7d --by project --since 2026-10-07
+python3 adhoc_quotas_analysis/usage_split.py --span 5h --by kind</pre></div>
+  <p class="note">Until 2026-10-11 this folder also held the notebook and scripts that priced transcript tokens themselves (<code>analysis.ipynb</code>, <code>quota_model.py</code>, <code>window_gaps.py</code>), the one-time migrations of 2026-08-30 → 10-10 (each recorded in <code>doc/changes.md</code>) and the investigation notes of 2026-08/09: all in git at <code>12956dc</code> (<code>git show 12956dc:adhoc_quotas_analysis/AGENTS.md</code>).</p>
+
+  <footer>Source: <code>adhoc_quotas_analysis/CONCLUSIONS.md</code> (the same sections and numbers; they change together) · the project: <code>README.html</code> at the repo root.</footer>
 </main>
 </body>
 </html>

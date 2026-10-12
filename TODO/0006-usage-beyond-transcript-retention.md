@@ -38,6 +38,6 @@ Claude Code deletes transcripts after `cleanupPeriodDays` (365 on the Mac). The 
 - 2026-10-11: created (claude), from `TODO.md` (merged into `TODO/` and removed)
 
 ## Links
-- `USAGE_DATA_REFERENCE.md` §5.7 and §7
+- `doc/tables.md` §7.6 and §8
 
 ## Result

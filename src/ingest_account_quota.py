@@ -6,7 +6,7 @@ row in the JSONL shape the old files used - {ts, iso, source, ...}. It checks
 the row, extracts the typed columns (ts, percents, resets) and inserts it with
 the JSON kept verbatim in `raw`. A row is not written when:
   - it is malformed, or carries per-session fields (scope rule,
-    USAGE_DATA_REFERENCE.md §1): rejected with ValueError;
+    doc/tables.md §1): rejected with ValueError;
   - the same row is already stored (`row_hash`): a duplicate;
   - (statusline rows, dedup on) it repeats the same session's latest reading:
     same observed_at, percents and resets. A re-render adds nothing; a new
@@ -25,7 +25,7 @@ line, inserted with the line itself as `raw`:
     ingest_account_quota.py --agent claude [--no-dedup] < rows.jsonl
 prints {"inserted": n, "duplicate": n, "redundant": n, "rejected": n}.
     ingest_account_quota.py --agent claude --sync-from=MACHINE --after=ROWID
-is the other side of the 2-min sync (design/DESIGN.md §3.3), run over
+is the other side of the 2-min sync (doc/design.md §3.3), run over
 ssh by MACHINE's claude_quota_api_poller.py --sync-with: stdin holds
 MACHINE's own new readings, one {"raw", "machine"} line each, stored here
 (no dedup: the sender already deduplicated); then it prints this machine's

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """The gate of data/<agent>/aggregates/<machine>.db (Category 3,
-design/DESIGN.md §6.3): the only code that writes one, this machine's own
+doc/design.md §6.3): the only code that writes one, this machine's own
 and, on the VM, the Mac's copy (through receive_from_machine.py).
 
 It checks each `slots` row - every column there, of the right type, ts a
 multiple of 300, counts not negative, the machine of the file it goes into
 (one file per machine, P14), no extra key (so never a quota percent:
-USAGE_DATA_REFERENCE.md §1) - and inserts it
+doc/tables.md §1) - and inserts it
 with INSERT OR IGNORE: a slot is written once, when final, and never
 changes; the same slot sent twice is a no-op.
 """

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Category 3 (design/DESIGN.md §6.2): the final 5-min slots, into
+"""Category 3 (doc/design.md §6.2): the final 5-min slots, into
 data/claude/aggregates/<this machine>.db. The `aggregates` job's command,
 every 5 min:
   1. transcript_reader.py: new transcript lines -> data/claude/intermediary.db

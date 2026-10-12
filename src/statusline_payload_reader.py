@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Collector for the Claude statusline payload: the JSON Claude Code hands
 every statusline render, piped here unchanged by agent-statusline, which
-runs this file directly (its path is the contract: design/DESIGN.md §7.1, "Contract
+runs this file directly (its path is the contract: doc/design.md §7.1, "Contract
 with agent-statusline"; install.sh writes its first line, this machine's
 python with -S, and MACHINE_NAME below). That payload is the only free,
-per-render source of Claude's quota percent (USAGE_DATA_SOURCES.md §3.1).
+per-render source of Claude's quota percent (doc/upstream.md §3.1).
 
 It splits the payload by scope and hands each part to its gate:
   - the quota reading -> ingest_account_quota.py (account_quotas.db),

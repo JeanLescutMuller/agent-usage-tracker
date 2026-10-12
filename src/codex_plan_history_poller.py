@@ -8,7 +8,7 @@ finished 5-hour / 7-day window comes back with `used_basis_points`
 (hundredths of a percent, fractional), where every live feed - app-server,
 session files, Claude's headers - is whole percents. It covers the last 7
 days, so one fetch a day with overlap never loses a window, and a missed
-day is recovered by the next fetch. See USAGE_DATA_SOURCES.md §4.4.
+day is recovered by the next fetch. See doc/upstream.md §4.4.
 
 The endpoint is not exposed through `codex app-server` (the Codex TUI calls
 it directly over HTTP), so this reads the same bearer token and account id

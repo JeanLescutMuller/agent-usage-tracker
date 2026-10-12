@@ -29,7 +29,7 @@
 #
 # Independent of agent-statusline: either can be installed first, or alone.
 # Without the statusline there are no push rows and the Claude poller stays
-# on its idle cadence (design/DESIGN.md §7.1).
+# on its idle cadence (doc/design.md §7.1).
 # Without job-runner the triggers run, but every check fails until it is
 # installed.
 set -uo pipefail
@@ -156,7 +156,7 @@ JOBS="claude-quota:60 aggregates:300"
 
 step "runtime layout"
 # data/<agent>/account_quotas.db + sessions_usages.db - see
-# USAGE_DATA_REFERENCE.md §1.
+# doc/design.md §2.
 mkdir -p "$RUNTIME/data/claude" "$RUNTIME/data/codex" "$RUNTIME/state" "$RUNTIME/logs"
 ok "data/, state/, logs/"
 

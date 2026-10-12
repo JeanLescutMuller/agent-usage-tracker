@@ -1,6 +1,6 @@
 #!/bin/bash
 # Tests for src/aggregate_slots.py and its gate src/ingest_aggregates.py
-# (Category 3, design/DESIGN.md §6): final slots only, transcript
+# (Category 3, doc/design.md §6): final slots only, transcript
 # requests with telemetry's cost, telemetry-only requests in their session's
 # folder with cache writes of unknown duration, tokens_without_usd, each slot
 # written once, the gate's checks. Fixture rows only; no transcript is read.
