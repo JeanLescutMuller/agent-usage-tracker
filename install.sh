@@ -11,7 +11,8 @@
 #   databases), the collectors, and usage_db.py; statusline_payload_reader.py
 #   is the executable the Claude statusline (the separate agent-statusline
 #   project) pipes its stdin payload into, and reads a line back from;
-# - the jobs' job-runner entrypoints (<job>.sh, from jobs/) and one trigger
+# - the jobs' job-runner entrypoints (<job>.sh, from jobs/), their dashboard
+#   settings (<job>.conf, given to job-runner's dashboard by put-conf.sh) and one trigger
 #   each, com.jeanlescut.agent-usage-tracker.<job>: claude-quota (60s tick),
 #   aggregates (every 5 min), and on macOS only codex-quota (60s)
 #   and codex-plan-history (hourly); each entrypoint decides, works and
@@ -179,6 +180,11 @@ step "jobs and their triggers ($([ "$OS" = Darwin ] && echo LaunchAgents || echo
 for entry in $JOBS; do
     JOB="${entry%%:*}" INTERVAL="${entry#*:}"
     _deploy "$SCRIPT_DIR/jobs/$JOB.sh" "$RUNTIME/$JOB.sh"
+    # Its dashboard settings, beside it; job-runner's put-conf.sh gives them to the dashboard on the VM (job-runner DESIGN §11)
+    _deploy "$SCRIPT_DIR/jobs/$JOB.conf" "$RUNTIME/$JOB.conf"
+    if [ -f "$HOME/opt/job-runner/put-conf.sh" ]; then
+        bash "$HOME/opt/job-runner/put-conf.sh" "agent-usage-tracker.$JOB" "$RUNTIME/$JOB.conf" >/dev/null && ok "dashboard settings of $JOB" || skip "dashboard settings of $JOB not sent"
+    fi
     _schedule job "com.jeanlescut.agent-usage-tracker.$JOB" "$JOB.sh every ${INTERVAL}s"
 done
 JOB="" INTERVAL=""
