@@ -293,7 +293,7 @@ The Codex poller skips while a session file is fresh (§2.3), so the Codex readi
 
 ### 7.6 Retention
 
-None: rows are kept indefinitely. Revisit if `data/claude/` passes ~1 GB (178 MB after the 2026-10-08 migration). Claude Code deletes its transcripts after 365 days (`TODO/0006`).
+None: rows are kept indefinitely. Revisit if `data/claude/` passes ~1 GB (178 MB after the 2026-10-08 migration). Claude Code deletes its transcripts after 365 days ([Todoist: usage beyond transcript retention](https://app.todoist.com/app/task/6hm2wFCFJ2CGcx7V)).
 
 ---
 
@@ -304,7 +304,7 @@ None: rows are kept indefinitely. Revisit if `data/claude/` passes ~1 GB (178 MB
 | Codex usage per day × model × client, relative | Backend analytics (Upstream §4.4) | The only per-client split; relative only |
 | Claude quota status beyond the percent (`status`, `representative-claim`, overage) | `/v1/messages` headers (Upstream §3.6) | Only reachable through a billed request of our own |
 
-Deliberately not captured because it already persists elsewhere: Codex's quota as each session file records it, turn by turn (Upstream §4.1; `TODO/0007`).
+Deliberately not captured because it already persists elsewhere: Codex's quota as each session file records it, turn by turn (Upstream §4.1; [Todoist: codex in the four categories](https://app.todoist.com/app/task/6hm2wFCjhFFJqQQV)).
 
 ---
 

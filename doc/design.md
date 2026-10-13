@@ -9,7 +9,7 @@ Records Claude Code usage over time - quota percent, tokens, Claude Code's own $
 | Words | the `## Vocabulary` table of `AGENTS.md` |
 | History | the migration plan and the record of the open questions: `git show 1ced0c4:design/MIGRATION_PLAN.md`, `git show 1ced0c4:design/OPEN_QUESTIONS.md` |
 | Changed 2026-10-12 | P13 `data/claude/intermediary.db` replaces `intermediary/claude/`; P14 one `aggregates` file per machine in `data/claude/aggregates/`, replacing `central/` (§11); built the same day, 18:45 UTC (`migrate_to_target.py data-layout`) |
-| Open work | `TODO/`, one file per task |
+| Open work | Todoist (skill `task-management`): its tasks carry `Repo: agent-usage-tracker`; [`viewer.html`](../viewer.html) shows them |
 
 ## 1. The four categories, and the picture
 
@@ -67,7 +67,7 @@ Data only flows 2 → 3 → 4 and 1 → 4. Only Categories 1 and 3 cross machine
 ├── FOR_READERS.md                  how other projects read the data
 ├── doc/                            design.md (this file), tables.md (every table, field by field),
 │                                   upstream.md (what exists upstream), changes.md (what changed, when)
-├── TODO/                           open work, one file per task; done/ for finished ones
+├── viewer.html                     open work: this repo's tasks in Todoist
 ├── src/                            gates, collectors, usage_db.py; launchd/, systemd/ trigger templates
 ├── jobs/                           job-runner entrypoints <job>.sh and their dashboard settings <job>.conf
 ├── install.sh, uninstall.sh
@@ -288,8 +288,8 @@ aggregates.sh ─▶ 1 transcript_reader.py ─▶ intermediary.db           agg
 |---|---|---|
 | statusline reading + printed line (Mac, VM) | LIVE | about 24 ms per render |
 | Category 1 sync Mac ↔ VM | LIVE | both databases hold the same readings |
-| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, `TODO/0010`) |
-| telemetry receiver `otel` | LIVE | auto-apply's Agent SDK sessions send none: their slots carry tokens without $ (`TODO/0004`) |
+| polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, [Todoist: token renewal without a message](https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3)) |
+| telemetry receiver `otel` | LIVE | auto-apply's Agent SDK sessions send none: their slots carry tokens without $ ([Todoist: telemetry for agent sdk sessions](https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV)) |
 | Category 3 `slots` (Mac, VM) | LIVE | history since 2026-07-30; `usd` since 2026-09-30 |
 | the Mac's slots on the VM | LIVE | `data/claude/aggregates/chan-lescut-macbook-pro.db`, the same rows as the Mac's |
 | P13 `data/claude/intermediary.db`, P14 one aggregates file per machine | LIVE | since 2026-10-12 18:45 UTC; the slots still equal a separate count of every request (Mac 3,331, VM 41) |
@@ -345,7 +345,7 @@ Proposed by the agent, each validated by Jean: P1–P12 and P15 on 2026-10-10, P
 | P12 | one job `aggregates` | reading, building and sending under one claim: two runs would read the same bytes | the jobs `transcripts` and `push` |
 | P13 | the intermediary tables in one file, `data/claude/intermediary.db`, with the offsets as a table (Jean, 2026-10-12) | everything a machine keeps lives under `data/<agent>/`; one file to delete for a rebuild; the offsets commit with their requests | a folder `intermediary/claude/` with `requests.db` + `offsets.json` |
 | P14 | Category 3 as one file per machine, `data/claude/aggregates/<machine>.db`, on the VM too (Jean, 2026-10-12) | a full reset of one machine's slots is deleting one file; one writer machine per file | the folder `central/<machine>/` (left from the push of whole databases); one shared file with a `machine` column (a reset would need a `DELETE`: insert-only) |
-| P15 | no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; *when* is lost, and readers treat the stretch as unknown | any message opens a 5-hour window at an arbitrary time (`doc/upstream.md` §5.2) | a keepalive message every few hours; not tried yet: a command that sends no message (`TODO/0010`) |
+| P15 | no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; *when* is lost, and readers treat the stretch as unknown | any message opens a 5-hour window at an arbitrary time (`doc/upstream.md` §5.2) | a keepalive message every few hours; not tried yet: a command that sends no message ([Todoist: token renewal without a message](https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3)) |
 | — | `slots` is one table, no `session_id` | sessions are a Category 2 detail; readers need slots | a `session_totals` table |
 | — | Category 4 belongs to a reader | each reader asks its own question | Category 4 built here every 5 min |
 | — | no $ computed for Claude | Claude Code states its own $ | tokens × list price |
@@ -367,7 +367,7 @@ Proposed by the agent, each validated by Jean: P1–P12 and P15 on 2026-10-10, P
 
 ## 13. Not decided: Codex
 
-Codex runs on the Mac only (not installed on the VM) and keeps its pre-design jobs; nothing in this design may break them. Picking it up is `TODO/0007`.
+Codex runs on the Mac only (not installed on the VM) and keeps its pre-design jobs; nothing in this design may break them. Picking it up is [Todoist: codex in the four categories](https://app.todoist.com/app/task/6hm2wFCjhFFJqQQV).
 
 ```
 job codex-quota          tick 1 min ─▶ codex_quota_api_poller.py ◀─ codex app-server (account/rateLimits/read, account/usage/read)

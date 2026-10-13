@@ -10,7 +10,7 @@ For *working on* this repo. Read only the file that answers your question:
 | When did a row's shape or a path change? | `doc/changes.md` |
 | How does another project read the data? | `FOR_READERS.md` (cited by other repos: keep its path) |
 | What do the percents mean in $ and tokens? | `adhoc_quotas_analysis/CONCLUSIONS.md` (its own `AGENTS.md`) |
-| What is left to do? | `TODO/`, one file per task |
+| What is left to do? | Todoist (skill `task-management`): its tasks carry `Repo: agent-usage-tracker`; [`viewer.html`](viewer.html) shows them |
 | What does each test cover? | `tests/README.md` |
 
 Code: `src/` (deployed flat to `~/opt/agent-usage-tracker/src/`; the gates are `ingest_*.py`), `jobs/` (job-runner entrypoints), `install.sh` / `uninstall.sh`; the full tree is `doc/design.md` §2.

@@ -75,7 +75,7 @@ The first full Max 5x week (10-07 16:51 → 10-12 19:00, peak 69%, $1,021.88, 2,
 | test runs | $0.18 | 4.3 M, 3.9 M of them without $ |
 | scheduled runs | $0.00 | 0.4 M, all without $ |
 
-Test and scheduled runs send no telemetry, so their tokens have no $ (`TODO/0004`). By machine: the Mac $1,021.86, the VM $0.02 (one request).
+Test and scheduled runs send no telemetry, so their tokens have no $ ([Todoist: telemetry for agent sdk sessions](https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV)). By machine: the Mac $1,021.86, the VM $0.02 (one request).
 
 ## 4. Frozen findings (Pro and Codex, 2026-08/09)
 

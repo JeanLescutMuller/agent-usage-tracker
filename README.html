@@ -132,7 +132,7 @@
       <tr><td>Words</td><td>the <code>## Vocabulary</code> table of <code>AGENTS.md</code></td></tr>
       <tr><td>History</td><td>the migration plan and the record of the open questions: <code>git show 1ced0c4:design/MIGRATION_PLAN.md</code>, <code>git show 1ced0c4:design/OPEN_QUESTIONS.md</code></td></tr>
       <tr><td>Start here</td><td>rules for agents: <code>AGENTS.md</code> · how other projects read the data: <code>FOR_READERS.md</code> · every table, field by field: <code>doc/tables.md</code> · what usage data exists upstream: <code>doc/upstream.md</code> · what changed, when: <code>doc/changes.md</code></td></tr>
-      <tr><td>Open work</td><td><code>TODO/</code>, one file per task</td></tr>
+      <tr><td>Open work</td><td>Todoist, tasks with <code>Repo: agent-usage-tracker</code>; <a href="viewer.html">viewer.html</a> shows them</td></tr>
     </table>
   </div>
   <nav>
@@ -310,7 +310,7 @@
 │                                   tables.md (every table, field by field)
 │                                   upstream.md (what exists upstream)
 │                                   changes.md (what changed, when)
-├── TODO/                           open work, one file per task; done/
+├── viewer.html                     open work: this repo's tasks in Todoist
 ├── src/                            gates, collectors, usage_db.py;
 │                                   launchd/, systemd/ trigger templates
 ├── jobs/                           job-runner entrypoints &lt;job&gt;.sh,
@@ -546,7 +546,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <div class="flow">
         <div class="node vendor">Claude Code sends telemetry</div><span class="arr">→</span><div class="node tracker">telemetry_receiver.py</div><span class="arr">→<i>tokens + Claude Code's $ per request</i>→</span><div class="node db k2">claude/sessions_usages.db<small>telemetry</small></div>
       </div>
-      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<code>TODO/0004</code>).</p>
+      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>).</p>
     </div>
     <div class="lane jl-agg"><div class="tag">job aggregates · every 5 min · Category 3</div>
       <div class="flow">
@@ -609,8 +609,8 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <tr><th>Component</th><th>Status</th><th>Note</th></tr>
       <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
       <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
-      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, <code>TODO/0010</code>)</td></tr>
-      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<code>TODO/0004</code>)</td></tr>
+      <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, <a href="https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3">Todoist: token renewal without a message</a>)</td></tr>
+      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>)</td></tr>
       <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
       <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>data/claude/aggregates/chan-lescut-macbook-pro.db</code>, the same rows as the Mac's</td></tr>
       <tr><td>P13 <code>data/claude/intermediary.db</code>, P14 one aggregates file per machine</td><td><span class="badge b-live">LIVE</span></td><td>since 2026-10-12 18:45 UTC; the slots still equal a separate count of every request (Mac 3,331, VM 41)</td></tr>
@@ -664,7 +664,7 @@ bash tests/run.sh    # hermetic</pre>
       <tr><td>P12</td><td>one job <code>aggregates</code></td><td>reading, building and sending under one claim: two runs would read the same bytes</td><td>the jobs <code>transcripts</code> and <code>push</code></td></tr>
       <tr><td>P13</td><td>the intermediary tables in one file, <code>data/claude/intermediary.db</code>, with the offsets as a table (Jean, 2026-10-12)</td><td>everything a machine keeps lives under <code>data/&lt;agent&gt;/</code>; one file to delete for a rebuild; the offsets commit with their requests</td><td>a folder <code>intermediary/claude/</code> with <code>requests.db</code> + <code>offsets.json</code></td></tr>
       <tr><td>P14</td><td>Category 3 as one file per machine, <code>data/claude/aggregates/&lt;machine&gt;.db</code>, on the VM too (Jean, 2026-10-12)</td><td>a full reset of one machine's slots is deleting one file; one writer machine per file</td><td>the folder <code>central/&lt;machine&gt;/</code> (left from the push of whole databases); one shared file with a <code>machine</code> column (a reset would need a <code>DELETE</code>: insert-only)</td></tr>
-      <tr><td>P15</td><td>no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; <i>when</i> is lost, and readers treat the stretch as unknown</td><td>any message opens a 5-hour window at an arbitrary time (<code>doc/upstream.md</code> §5.2)</td><td>a keepalive message every few hours; not tried yet: a command that sends no message (<code>TODO/0010</code>)</td></tr>
+      <tr><td>P15</td><td>no Claude reading while Claude Code runs on neither machine for more than 8 h: accepted (Jean, 2026-10-10). The poller borrows each machine's login token, which only Claude Code renews (8 h; the refresh token, weeks: then only a new login helps). Usage made meanwhile elsewhere shows up in the first reading afterwards, as a total; <i>when</i> is lost, and readers treat the stretch as unknown</td><td>any message opens a 5-hour window at an arbitrary time (<code>doc/upstream.md</code> §5.2)</td><td>a keepalive message every few hours; not tried yet: a command that sends no message (<a href="https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3">Todoist: token renewal without a message</a>)</td></tr>
       <tr><td>—</td><td><code>slots</code> is one table, no <code>session_id</code></td><td>sessions are a Category 2 detail; readers need slots</td><td>a <code>session_totals</code> table</td></tr>
       <tr><td>—</td><td>Category 4 belongs to a reader</td><td>each reader asks its own question</td><td>Category 4 built here every 5 min</td></tr>
       <tr><td>—</td><td>no $ computed for Claude</td><td>Claude Code states its own $</td><td>tokens × list price</td></tr>
@@ -690,7 +690,7 @@ bash tests/run.sh    # hermetic</pre>
 
   <h2 id="codex">13 · Not decided: Codex</h2>
   <div class="card">
-    <p class="note" style="margin-top: 0">Codex runs on the Mac only (not installed on the VM) and keeps its pre-design jobs; nothing in this design may break them. Picking it up is <code>TODO/0007</code>.</p>
+    <p class="note" style="margin-top: 0">Codex runs on the Mac only (not installed on the VM) and keeps its pre-design jobs; nothing in this design may break them. Picking it up is <a href="https://app.todoist.com/app/task/6hm2wFCjhFFJqQQV">Todoist: codex in the four categories</a>.</p>
 <pre>job codex-quota          tick 1 min ─▶ codex_quota_api_poller.py ◀─ codex app-server (account/rateLimits/read, account/usage/read)
 job codex-plan-history   tick 1 h   ─▶ codex_plan_history_poller.py ◀─ ChatGPT backend (usage/plan_limit_history), once a day
                                          └─▶ ingest_account_quota.py ─▶ data/codex/account_quotas.db
@@ -714,7 +714,7 @@ job aggregates (Codex part)  5 min  ─▶ transcript_reader.py ◀─ ~/.codex/
     <p class="note">Open for that day: Codex session-file retention; usage no local file sees (cloud tasks, IDE extension, ChatGPT app), visible only account-wide (<code>doc/upstream.md</code> §4.3, §4.4); <code>codex-auto-review</code> turns (ccusage calls them <code>gpt-5.6-luna</code>: keep Codex's own name); Codex on the VM or Mac-only.</p>
   </div>
 
-  <footer>Rules: <code>AGENTS.md</code> · open work: <code>TODO/</code> · readers: <code>FOR_READERS.md</code> · the same design for agents: <code>doc/design.md</code>.</footer>
+  <footer>Rules: <code>AGENTS.md</code> · open work: <a href="viewer.html">viewer.html</a> (Todoist) · readers: <code>FOR_READERS.md</code> · the same design for agents: <code>doc/design.md</code>.</footer>
 </main>
 </body>
 </html>
