@@ -12,7 +12,7 @@ Every test is hermetic: a temp `$HOME`, and every python call pointed at a temp 
 ## What's intentionally not covered
 
 - Live API calls and the real macOS Keychain read (`claude_quota_api_poller.py`'s `fetch_token`, the pollers' real requests) - re-verified by hand, see `doc/tables.md` §9.
-- agent-statusline and auto-apply. Their side of the contract (piping the payload in and showing the printed line; reading the view `latest`) is tested in their repos against a stub of this one.
+- agent-statusline and auto-job-apply. Their side of the contract (piping the payload in and showing the printed line; reading the view `latest`) is tested in their repos against a stub of this one.
 - The job entrypoints (`jobs/*.sh`): their copies in job-runner's `examples/agent-usage-tracker/` are tested there (`test/examples_test.sh`), the work stubbed.
 
 ## Files

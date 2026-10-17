@@ -1,6 +1,6 @@
 # For readers: how to read this project's data
 
-For any project or script that **reads** what agent-usage-tracker stores: a status line, auto-apply, an analysis, a future quota maximizer. This file says how to read it safely, and what to read. What each field means: `doc/tables.md`; what exists upstream: `doc/upstream.md`; why it is built this way: `doc/design.md`; when a row's shape changed: `doc/changes.md`.
+For any project or script that **reads** what agent-usage-tracker stores: a status line, auto-job-apply, an analysis, a future quota maximizer. This file says how to read it safely, and what to read. What each field means: `doc/tables.md`; what exists upstream: `doc/upstream.md`; why it is built this way: `doc/design.md`; when a row's shape changed: `doc/changes.md`.
 
 Last checked: 2026-10-12.
 

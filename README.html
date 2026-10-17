@@ -145,7 +145,7 @@
       <span><span class="sw" style="border-color: var(--vendor)"></span>Claude Code / Codex (vendor apps)</span>
       <span><span class="sw" style="border-color: var(--statusline)"></span>agent-statusline</span>
       <span><span class="sw" style="border-color: var(--tracker)"></span>agent-usage-tracker (this repo)</span>
-      <span><span class="sw" style="border-color: var(--reader)"></span>readers: auto-apply and any other project (<code>FOR_READERS.md</code>)</span>
+      <span><span class="sw" style="border-color: var(--reader)"></span>readers: auto-job-apply and any other project (<code>FOR_READERS.md</code>)</span>
       <span><span class="sw" style="border-color: var(--os); border-style: dashed"></span>scheduler (launchd on the Mac, systemd on the VM) via job-runner</span>
     </div>
     <div class="legend" style="margin-top: 10px">
@@ -263,7 +263,7 @@
       <!-- readers -->
       <text class="small" x="24" y="800" style="font-weight: 600">READ BY</text>
       <text x="24" y="822" style="fill: var(--statusline)">agent-statusline</text><text class="small" x="150" y="822">← what statusline render prints</text>
-      <text x="24" y="846" style="fill: var(--reader)">auto-apply</text><text class="small" x="150" y="846">← claude/account_quotas.db (view latest)</text>
+      <text x="24" y="846" style="fill: var(--reader)">auto-job-apply</text><text class="small" x="150" y="846">← claude/account_quotas.db (view latest)</text>
       <text class="small" x="804" y="800" style="font-weight: 600">READ BY</text>
       <text x="804" y="822" style="fill: var(--reader)">readers, graphs (FOR_READERS.md)</text>
       <text class="small" x="804" y="846">← Categories 1 and 3</text>
@@ -371,7 +371,7 @@
     </svg>
     <table style="margin-top: 8px">
       <tr><th>For each window (5h, 7d) separately</th><th>Stored in the database</th></tr>
-      <tr><td><code>reset_dt &lt;= now</code> → the view <code>latest</code> reads <b>0%</b> and an empty reset; otherwise the reading. <code>reset_dt</code> is the one the latest reading reported. agent-statusline gets it printed by <code>statusline_payload_reader.py</code>; auto-apply queries the view.</td><td>only real observations, with their reset times (<code>five_hour_resets_ts</code>, <code>seven_day_resets_ts</code>); no predicted rows</td></tr>
+      <tr><td><code>reset_dt &lt;= now</code> → the view <code>latest</code> reads <b>0%</b> and an empty reset; otherwise the reading. <code>reset_dt</code> is the one the latest reading reported. agent-statusline gets it printed by <code>statusline_payload_reader.py</code>; auto-job-apply queries the view.</td><td>only real observations, with their reset times (<code>five_hour_resets_ts</code>, <code>seven_day_resets_ts</code>); no predicted rows</td></tr>
     </table>
     <table style="margin-top: 8px">
       <tr><th>Time</th><th>Stored</th><th><code>latest</code> gives</th></tr>
@@ -505,7 +505,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
     </table>
     <p class="note">Without agent-statusline there are no statusline readings: Claude Code runs a single <code>statusLine</code> command. The quota then comes from the poller only, and there are no session snapshots.</p>
   </div>
-  <h3 id="autoapply">7.2 · auto-apply</h3>
+  <h3 id="autojobapply">7.2 · auto-job-apply</h3>
   <div class="card">
     <p style="margin: 0"><code>runner/limits.py</code> reads <code>SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, ts FROM latest</code> from <code>account_quotas.db</code>, opened with <code>PRAGMA query_only = ON</code>.</p>
   </div>
@@ -546,7 +546,7 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <div class="flow">
         <div class="node vendor">Claude Code sends telemetry</div><span class="arr">→</span><div class="node tracker">telemetry_receiver.py</div><span class="arr">→<i>tokens + Claude Code's $ per request</i>→</span><div class="node db k2">claude/sessions_usages.db<small>telemetry</small></div>
       </div>
-      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>).</p>
+      <p class="note"><span class="badge b-partial">PARTIAL</span> auto-job-apply's Agent SDK sessions send no telemetry: their slots carry tokens without $ (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>).</p>
     </div>
     <div class="lane jl-agg"><div class="tag">job aggregates · every 5 min · Category 3</div>
       <div class="flow">
@@ -610,11 +610,11 @@ requests 2 · in 6 · out 351 · cache read 643,761 · write 5m 0 · write 1h 72
       <tr><td>statusline reading + printed line (Mac, VM)</td><td><span class="badge b-live">LIVE</span></td><td>about 24 ms per render</td></tr>
       <tr><td>Category 1 sync Mac ↔ VM (<code>claude-quota</code>)</td><td><span class="badge b-live">LIVE</span></td><td>both databases hold the same readings</td></tr>
       <tr><td>polling only when no reading is fresh</td><td><span class="badge b-partial">PARTIAL</span></td><td>the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, <a href="https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3">Todoist: token renewal without a message</a>)</td></tr>
-      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-apply's Agent SDK sessions send none (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>)</td></tr>
+      <tr><td>telemetry receiver <code>otel</code></td><td><span class="badge b-live">LIVE</span></td><td>auto-job-apply's Agent SDK sessions send none (<a href="https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV">Todoist: telemetry for agent sdk sessions</a>)</td></tr>
       <tr><td>Category 3 <code>slots</code> (<code>aggregates</code>, Mac and VM)</td><td><span class="badge b-live">LIVE</span></td><td>history since 2026-07-30; <code>usd</code> since 2026-09-30</td></tr>
       <tr><td>the Mac's slots on the VM</td><td><span class="badge b-live">LIVE</span></td><td><code>data/claude/aggregates/chan-lescut-macbook-pro.db</code>, the same rows as the Mac's</td></tr>
       <tr><td>P13 <code>data/claude/intermediary.db</code>, P14 one aggregates file per machine</td><td><span class="badge b-live">LIVE</span></td><td>since 2026-10-12 18:45 UTC; the slots still equal a separate count of every request (Mac 3,331, VM 41)</td></tr>
-      <tr><td>readers: agent-statusline, auto-apply</td><td><span class="badge b-live">LIVE</span></td><td>the printed line; the view <code>latest</code></td></tr>
+      <tr><td>readers: agent-statusline, auto-job-apply</td><td><span class="badge b-live">LIVE</span></td><td>the printed line; the view <code>latest</code></td></tr>
       <tr><td>Category 4</td><td><span class="badge b-planned">PLANNED</span></td><td>a reader's (<code>FOR_READERS.md</code>); this repo's own analysis: <code>adhoc_quotas_analysis/</code></td></tr>
       <tr><td>Codex: <code>codex-quota</code>, <code>codex-plan-history</code>, its turns (Mac)</td><td><span class="badge b-live">LIVE</span></td><td>outside the four categories; its rows no longer reach the VM (section 13)</td></tr>
     </table>

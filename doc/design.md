@@ -41,7 +41,7 @@ Data only flows 2 → 3 → 4 and 1 → 4. Only Categories 1 and 3 cross machine
  │                                                  │  aggregates)  │                                                  │
  │                                                  │               │                                                  │
  │ read by: agent-statusline (the printed line),    │               │ CAT 4  a reader (FOR_READERS.md): Categories 1+3 │
- │          auto-apply (view latest)                │               │                                                  │
+ │          auto-job-apply (view latest)                │               │                                                  │
  └──────────────────────────────────────────────────┘               └──────────────────────────────────────────────────┘
 ```
 
@@ -248,7 +248,7 @@ The two projects share two paths, each written by one side only; each works with
 
 Without agent-statusline there are no statusline readings and no session snapshots: Claude Code runs a single `statusLine` command. The quota then comes from the poller only.
 
-### 7.2 auto-apply
+### 7.2 auto-job-apply
 
 `runner/limits.py` reads `SELECT five_hour_pct, five_hour_resets_ts, seven_day_pct, seven_day_resets_ts, ts FROM latest` from `account_quotas.db`, opened with `PRAGMA query_only = ON`.
 
@@ -289,11 +289,11 @@ aggregates.sh ─▶ 1 transcript_reader.py ─▶ intermediary.db           agg
 | statusline reading + printed line (Mac, VM) | LIVE | about 24 ms per render |
 | Category 1 sync Mac ↔ VM | LIVE | both databases hold the same readings |
 | polling only when no reading is fresh | PARTIAL | the Mac polls, the VM waits; while the Mac sleeps the VM does try (seen 2026-10-11), but its login token expired (401: Claude Code last ran there on 10-08), so no reading is taken: the accepted gap (P15, [Todoist: token renewal without a message](https://app.todoist.com/app/task/6hm2wFP8GxXwMHF3)) |
-| telemetry receiver `otel` | LIVE | auto-apply's Agent SDK sessions send none: their slots carry tokens without $ ([Todoist: telemetry for agent sdk sessions](https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV)) |
+| telemetry receiver `otel` | LIVE | auto-job-apply's Agent SDK sessions send none: their slots carry tokens without $ ([Todoist: telemetry for agent sdk sessions](https://app.todoist.com/app/task/6hm2wF4RrF3RH6VV)) |
 | Category 3 `slots` (Mac, VM) | LIVE | history since 2026-07-30; `usd` since 2026-09-30 |
 | the Mac's slots on the VM | LIVE | `data/claude/aggregates/chan-lescut-macbook-pro.db`, the same rows as the Mac's |
 | P13 `data/claude/intermediary.db`, P14 one aggregates file per machine | LIVE | since 2026-10-12 18:45 UTC; the slots still equal a separate count of every request (Mac 3,331, VM 41) |
-| readers: agent-statusline, auto-apply | LIVE | the printed line; the view `latest` |
+| readers: agent-statusline, auto-job-apply | LIVE | the printed line; the view `latest` |
 | Category 4 | PLANNED | a reader's (`FOR_READERS.md`); this repo's own analysis: `adhoc_quotas_analysis/` |
 | Codex: `codex-quota`, `codex-plan-history`, its turns (Mac) | LIVE | outside the four categories; its rows no longer reach the VM (§13) |
 

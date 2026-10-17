@@ -17,7 +17,7 @@ A failed poll attempt (`error` set) goes to the poll_errors table instead.
 
 The account's freshest reading is the `latest` view (the reset rule
 applied), read by statusline_payload_reader.py for agent-statusline, by
-auto-apply and by the claude-quota poller; until 2026-10-10 this gate also
+auto-job-apply and by the claude-quota poller; until 2026-10-10 this gate also
 kept it in a file, state/quota/claude.
 
 Command line (migration, and later the VM push): one JSONL row per stdin

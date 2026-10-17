@@ -27,7 +27,7 @@ Stores nothing when the payload has no rate_limits (a session before its
 first message). Then, whatever it stored, prints the account's freshest
 reading - the `latest` view: any source, any machine, the reset rule
 applied - as one line of six fields separated by \x1c, the format agent-
-statusline and auto-apply read since 2026-08:
+statusline and auto-job-apply read since 2026-08:
     five_pct five_reset week_pct week_reset source observed_at
 (percents rounded half up; a reset that has passed is empty), or nothing
 when there is no reading. Always exits 0 and prints nothing else: a
